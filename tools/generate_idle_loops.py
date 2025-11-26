@@ -124,12 +124,36 @@ class IdleLoopGenerator:
 
         # LivePortrait 초기화 (선택적)
         try:
-            # LivePortrait는 별도 설치 필요
-            # from liveportrait import LivePortrait
-            # self._live_portrait = LivePortrait()
-            logger.info("LivePortrait: Using placeholder (install separately)")
-        except ImportError:
-            logger.warning("LivePortrait not available. Using simple animation.")
+            # 프로젝트 경로 추가
+            import sys
+            project_root = Path(__file__).parent.parent
+            sys.path.insert(0, str(project_root))
+
+            from src.models.integrations import LivePortraitModel
+            import asyncio
+
+            self._live_portrait = LivePortraitModel(
+                device="cuda",
+                output_size=self.output_size,
+            )
+
+            # 동기 컨텍스트에서 비동기 초기화
+            loop = asyncio.new_event_loop()
+            success = loop.run_until_complete(self._live_portrait.initialize())
+            loop.close()
+
+            if success:
+                logger.info("LivePortrait model initialized")
+            else:
+                logger.warning("LivePortrait initialization failed. Using fallback.")
+                self._live_portrait = None
+
+        except ImportError as e:
+            logger.warning(f"LivePortrait not available: {e}. Using simple animation.")
+            self._live_portrait = None
+        except Exception as e:
+            logger.warning(f"LivePortrait init error: {e}. Using simple animation.")
+            self._live_portrait = None
 
         return True
 
@@ -189,6 +213,80 @@ class IdleLoopGenerator:
 
         logger.info(f"Generating {emotion} idle loop...")
 
+        # LivePortrait 사용 시도
+        if self._live_portrait is not None:
+            try:
+                return self._generate_with_live_portrait(source_image, emotion, output_path, config)
+            except Exception as e:
+                logger.warning(f"LivePortrait failed: {e}. Using fallback.")
+
+        # 폴백: 간단한 애니메이션
+        return self._generate_with_simple_animation(source_image, emotion, output_path, config)
+
+    def _generate_with_live_portrait(
+        self,
+        source_image: np.ndarray,
+        emotion: str,
+        output_path: str,
+        config: dict,
+    ) -> bool:
+        """LivePortrait를 사용한 루프 생성"""
+        import asyncio
+
+        # 소스 특징 추출
+        loop = asyncio.new_event_loop()
+
+        try:
+            loop.run_until_complete(
+                self._live_portrait.extract_source_features(source_image)
+            )
+
+            # 감정에 따른 모션 강도
+            intensity = config.get("expression_intensity", 0.3)
+            if intensity < 0:
+                intensity = abs(intensity)
+
+            intensity = max(0.2, min(0.8, intensity + 0.3))
+
+            # 프레임 시퀀스 생성
+            frames = loop.run_until_complete(
+                self._live_portrait.generate_idle_sequence(
+                    emotion=emotion,
+                    num_frames=self.total_frames,
+                    motion_intensity=intensity,
+                )
+            )
+        finally:
+            loop.close()
+
+        if not frames:
+            return False
+
+        # 비디오 저장
+        fourcc = cv2.VideoWriter_fourcc(*"mp4v")
+        out = cv2.VideoWriter(
+            output_path,
+            fourcc,
+            self.fps,
+            self.output_size,
+        )
+
+        for frame in frames:
+            out.write(frame)
+
+        out.release()
+        logger.info(f"Generated with LivePortrait: {output_path}")
+
+        return True
+
+    def _generate_with_simple_animation(
+        self,
+        source_image: np.ndarray,
+        emotion: str,
+        output_path: str,
+        config: dict,
+    ) -> bool:
+        """간단한 애니메이션으로 루프 생성 (폴백)"""
         # 비디오 라이터 초기화
         fourcc = cv2.VideoWriter_fourcc(*"mp4v")
         out = cv2.VideoWriter(
@@ -212,7 +310,7 @@ class IdleLoopGenerator:
             out.write(animated_frame)
 
         out.release()
-        logger.info(f"Generated: {output_path}")
+        logger.info(f"Generated with simple animation: {output_path}")
 
         return True
 
