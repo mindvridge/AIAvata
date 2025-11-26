@@ -14,11 +14,12 @@ import io
 import logging
 import time
 from pathlib import Path
-from typing import AsyncGenerator, Optional, Union
+from typing import AsyncGenerator, Optional
 
 import numpy as np
 
 from ..models.schemas import TTSChunk
+from ..models.integrations import ChatterboxTTSModel
 
 logger = logging.getLogger(__name__)
 
@@ -39,6 +40,7 @@ class TTSModule:
         voice_sample_path: Optional[str] = None,
         sample_rate: int = 24000,
         device: str = "cuda",
+        voice_id: str = "default",
     ):
         """
         Initialize TTS Module.
@@ -47,13 +49,14 @@ class TTSModule:
             voice_sample_path: 음성 클로닝용 참조 오디오 경로
             sample_rate: 출력 샘플레이트
             device: Compute device
+            voice_id: 음성 ID
         """
         self.voice_sample_path = voice_sample_path
         self.sample_rate = sample_rate
         self.device = device
+        self.voice_id = voice_id
 
-        self._model = None
-        self._voice_sample = None
+        self._chatterbox_model: Optional[ChatterboxTTSModel] = None
         self._initialized = False
 
     async def initialize(self) -> None:
@@ -64,61 +67,49 @@ class TTSModule:
         logger.info("Initializing Chatterbox TTS model...")
 
         try:
-            # Chatterbox TTS 임포트 및 초기화
-            from chatterbox.tts import ChatterboxTTS
+            # ChatterboxTTSModel 초기화
+            self._chatterbox_model = ChatterboxTTSModel(
+                device=self.device,
+                sample_rate=self.sample_rate,
+            )
 
-            self._model = ChatterboxTTS.from_pretrained(device=self.device)
+            success = await self._chatterbox_model.initialize()
+
+            if not success:
+                logger.warning("Chatterbox TTS initialization returned False, using fallback")
 
             # 음성 샘플 로드 (있는 경우)
             if self.voice_sample_path and Path(self.voice_sample_path).exists():
-                self._voice_sample = self._load_voice_sample(self.voice_sample_path)
+                await self._chatterbox_model.load_voice(
+                    voice_path=self.voice_sample_path,
+                    voice_id=self.voice_id,
+                )
                 logger.info(f"Loaded voice sample from {self.voice_sample_path}")
 
             self._initialized = True
             logger.info("Chatterbox TTS model initialized successfully")
 
-        except ImportError:
-            logger.warning(
-                "Chatterbox TTS not installed. TTS will return mock audio. "
-                "Install with: pip install chatterbox-tts"
-            )
-            self._initialized = True  # Allow mock operation
-
         except Exception as e:
             logger.error(f"Failed to initialize TTS model: {e}")
-            raise
+            # Allow mock operation on failure
+            self._initialized = True
 
     def _ensure_initialized(self) -> None:
         """초기화 확인"""
         if not self._initialized:
             raise RuntimeError("TTS module not initialized. Call initialize() first.")
 
-    def _load_voice_sample(self, path: str) -> np.ndarray:
-        """음성 샘플 로드"""
-        try:
-            import soundfile as sf
-
-            audio, sr = sf.read(path)
-            if sr != self.sample_rate:
-                import librosa
-
-                audio = librosa.resample(audio, orig_sr=sr, target_sr=self.sample_rate)
-            return audio
-        except Exception as e:
-            logger.warning(f"Failed to load voice sample: {e}")
-            return None
-
     async def synthesize(
         self,
         text: str,
-        voice_sample: Optional[Union[str, np.ndarray]] = None,
+        voice_id: Optional[str] = None,
     ) -> np.ndarray:
         """
         텍스트를 음성으로 변환 (동기식, 전체 반환)
 
         Args:
             text: 변환할 텍스트
-            voice_sample: 음성 클로닝용 참조 오디오
+            voice_id: 사용할 음성 ID
 
         Returns:
             오디오 데이터 (numpy array)
@@ -128,29 +119,22 @@ class TTSModule:
         if not text.strip():
             return np.array([], dtype=np.float32)
 
-        # 음성 샘플 결정
-        sample = voice_sample
-        if sample is None:
-            sample = self._voice_sample
-        elif isinstance(sample, str):
-            sample = self._load_voice_sample(sample)
+        # 음성 ID 결정
+        use_voice_id = voice_id or self.voice_id
 
-        if self._model is None:
+        if self._chatterbox_model is None:
             # Mock audio for testing
             logger.debug("Using mock TTS audio (model not loaded)")
             return self._generate_mock_audio(len(text))
 
         try:
             # Chatterbox TTS 추론
-            audio = await asyncio.get_event_loop().run_in_executor(
-                None,
-                lambda: self._model.generate(
-                    text=text,
-                    audio_prompt=sample,
-                ),
+            audio = await self._chatterbox_model.synthesize(
+                text=text,
+                voice_id=use_voice_id,
             )
 
-            return audio.cpu().numpy().flatten()
+            return audio
 
         except Exception as e:
             logger.error(f"TTS synthesis error: {e}")
@@ -160,7 +144,7 @@ class TTSModule:
         self,
         text: str,
         chunk_size: int = 4096,
-        voice_sample: Optional[Union[str, np.ndarray]] = None,
+        voice_id: Optional[str] = None,
     ) -> AsyncGenerator[TTSChunk, None]:
         """
         텍스트를 음성으로 변환 (스트리밍)
@@ -168,7 +152,7 @@ class TTSModule:
         Args:
             text: 변환할 텍스트
             chunk_size: 청크 크기 (샘플 수)
-            voice_sample: 음성 클로닝용 참조 오디오
+            voice_id: 사용할 음성 ID
 
         Yields:
             TTSChunk: 오디오 청크
@@ -184,25 +168,44 @@ class TTSModule:
             )
             return
 
-        # 문장 단위로 분리하여 스트리밍
-        sentences = self._split_into_sentences(text)
+        # ChatterboxTTSModel의 스트리밍 합성 사용
+        use_voice_id = voice_id or self.voice_id
 
-        for i, sentence in enumerate(sentences):
-            is_last = i == len(sentences) - 1
+        if self._chatterbox_model:
+            chunk_index = 0
+            async for audio_chunk in self._chatterbox_model.synthesize_stream(
+                text=text,
+                voice_id=use_voice_id,
+                chunk_size=chunk_size,
+            ):
+                chunk_bytes = self._audio_to_bytes(audio_chunk)
+                duration_ms = len(audio_chunk) / self.sample_rate * 1000
 
-            # 각 문장 합성
-            audio = await self.synthesize(sentence, voice_sample)
+                yield TTSChunk(
+                    audio_data=chunk_bytes,
+                    sample_rate=self.sample_rate,
+                    duration_ms=duration_ms,
+                    is_last=False,
+                )
+                chunk_index += 1
 
-            if len(audio) == 0:
-                continue
+            # 마지막 빈 청크로 종료 표시
+            yield TTSChunk(
+                audio_data=b"",
+                sample_rate=self.sample_rate,
+                duration_ms=0,
+                is_last=True,
+            )
+        else:
+            # 폴백: 전체 합성 후 청크 분할
+            audio = await self.synthesize(text, voice_id)
 
-            # 청크로 분할하여 yield
             for j in range(0, len(audio), chunk_size):
                 chunk_audio = audio[j : j + chunk_size]
                 chunk_bytes = self._audio_to_bytes(chunk_audio)
 
                 duration_ms = len(chunk_audio) / self.sample_rate * 1000
-                is_chunk_last = is_last and (j + chunk_size >= len(audio))
+                is_chunk_last = (j + chunk_size >= len(audio))
 
                 yield TTSChunk(
                     audio_data=chunk_bytes,
@@ -211,14 +214,13 @@ class TTSModule:
                     is_last=is_chunk_last,
                 )
 
-                # 실시간 스트리밍 시뮬레이션을 위한 작은 지연
                 await asyncio.sleep(duration_ms / 1000 * 0.1)
 
     async def synthesize_stream_realtime(
         self,
         text_stream: AsyncGenerator[str, None],
         chunk_size: int = 4096,
-        voice_sample: Optional[Union[str, np.ndarray]] = None,
+        voice_id: Optional[str] = None,
     ) -> AsyncGenerator[TTSChunk, None]:
         """
         LLM 스트리밍 출력을 실시간으로 TTS 변환
@@ -226,7 +228,7 @@ class TTSModule:
         Args:
             text_stream: 텍스트 청크 스트림 (LLM 출력)
             chunk_size: 오디오 청크 크기
-            voice_sample: 음성 클로닝용 참조 오디오
+            voice_id: 사용할 음성 ID
 
         Yields:
             TTSChunk: 오디오 청크
@@ -242,7 +244,7 @@ class TTSModule:
 
             for sentence in sentences:
                 async for audio_chunk in self.synthesize_stream(
-                    sentence, chunk_size, voice_sample
+                    sentence, chunk_size, voice_id
                 ):
                     # 마지막 여부는 전체 스트림에서 결정되므로 False로 설정
                     audio_chunk.is_last = False
@@ -251,7 +253,7 @@ class TTSModule:
         # 남은 버퍼 처리
         if buffer.strip():
             async for audio_chunk in self.synthesize_stream(
-                buffer, chunk_size, voice_sample
+                buffer, chunk_size, voice_id
             ):
                 yield audio_chunk
 
@@ -302,9 +304,8 @@ class TTSModule:
 
     async def cleanup(self) -> None:
         """리소스 정리"""
-        if self._model is not None:
-            del self._model
-            self._model = None
-        self._voice_sample = None
+        if self._chatterbox_model is not None:
+            await self._chatterbox_model.cleanup()
+            self._chatterbox_model = None
         self._initialized = False
         logger.info("TTS module cleaned up")

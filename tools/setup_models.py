@@ -52,17 +52,19 @@ MODEL_CONFIGS = {
     },
     "lipsync": {
         "name": "MuseTalk",
-        "description": "실시간 립싱크 (별도 설치 필요)",
+        "description": "실시간 립싱크",
         "repo": "https://github.com/TMElyralab/MuseTalk",
         "license": "MIT",
-        "manual": True,
+        "model_dir": "models/musetalk",
+        "huggingface_repo": "TMElyralab/MuseTalk",
     },
     "portrait": {
         "name": "LivePortrait",
-        "description": "Idle 루프 생성 (별도 설치 필요)",
+        "description": "Idle 루프 및 얼굴 애니메이션 생성",
         "repo": "https://github.com/KwaiVGI/LivePortrait",
         "license": "MIT",
-        "manual": True,
+        "model_dir": "models/live_portrait",
+        "huggingface_repo": "KwaiVGI/LivePortrait",
     },
 }
 
@@ -200,6 +202,98 @@ def setup_face() -> bool:
         return False
 
 
+def setup_lipsync(device: str = "cuda") -> bool:
+    """MuseTalk 립싱크 모델 설정"""
+    logger.info("Setting up MuseTalk lip sync model...")
+
+    model_dir = Path(MODEL_CONFIGS["lipsync"]["model_dir"])
+    model_dir.mkdir(parents=True, exist_ok=True)
+
+    try:
+        # Hugging Face Hub를 통한 모델 다운로드 시도
+        try:
+            from huggingface_hub import snapshot_download
+
+            logger.info("Downloading MuseTalk models from Hugging Face...")
+            snapshot_download(
+                repo_id="TMElyralab/MuseTalk",
+                local_dir=str(model_dir),
+                local_dir_use_symlinks=False,
+                ignore_patterns=["*.md", "*.txt", ".git*"],
+            )
+            logger.info(f"MuseTalk models downloaded to {model_dir}")
+            return True
+
+        except ImportError:
+            logger.warning("huggingface_hub not installed. Trying alternative method...")
+
+        # 대안: MuseTalk 패키지 사용
+        try:
+            from musetalk.models.unet import MuseTalkUNet
+            logger.info("MuseTalk package is installed")
+            return True
+        except ImportError:
+            pass
+
+        # 모델 디렉토리만 생성
+        logger.warning(
+            f"MuseTalk model not downloaded. "
+            f"Install huggingface_hub: pip install huggingface_hub\n"
+            f"Or manually clone: git clone https://github.com/TMElyralab/MuseTalk"
+        )
+        return False
+
+    except Exception as e:
+        logger.error(f"Failed to setup MuseTalk: {e}")
+        return False
+
+
+def setup_portrait(device: str = "cuda") -> bool:
+    """LivePortrait 얼굴 애니메이션 모델 설정"""
+    logger.info("Setting up LivePortrait model...")
+
+    model_dir = Path(MODEL_CONFIGS["portrait"]["model_dir"])
+    model_dir.mkdir(parents=True, exist_ok=True)
+
+    try:
+        # Hugging Face Hub를 통한 모델 다운로드 시도
+        try:
+            from huggingface_hub import snapshot_download
+
+            logger.info("Downloading LivePortrait models from Hugging Face...")
+            snapshot_download(
+                repo_id="KwaiVGI/LivePortrait",
+                local_dir=str(model_dir),
+                local_dir_use_symlinks=False,
+                ignore_patterns=["*.md", "*.txt", ".git*", "docs/*", "assets/*"],
+            )
+            logger.info(f"LivePortrait models downloaded to {model_dir}")
+            return True
+
+        except ImportError:
+            logger.warning("huggingface_hub not installed. Trying alternative method...")
+
+        # 대안: LivePortrait 패키지 사용
+        try:
+            from liveportrait.inference import LivePortraitInference
+            logger.info("LivePortrait package is installed")
+            return True
+        except ImportError:
+            pass
+
+        # 모델 디렉토리만 생성
+        logger.warning(
+            f"LivePortrait model not downloaded. "
+            f"Install huggingface_hub: pip install huggingface_hub\n"
+            f"Or manually clone: git clone https://github.com/KwaiVGI/LivePortrait"
+        )
+        return False
+
+    except Exception as e:
+        logger.error(f"Failed to setup LivePortrait: {e}")
+        return False
+
+
 def setup_directories() -> None:
     """필요한 디렉토리 생성"""
     directories = [
@@ -215,18 +309,20 @@ def setup_directories() -> None:
         logger.info(f"Created directory: {dir_path}")
 
 
-def print_manual_instructions() -> None:
-    """수동 설치가 필요한 모델에 대한 안내"""
+def print_model_info() -> None:
+    """모델 정보 출력"""
     print("\n" + "=" * 60)
-    print("Manual Installation Required")
+    print("Model Information")
     print("=" * 60)
 
     for model_id, config in MODEL_CONFIGS.items():
-        if config.get("manual"):
-            print(f"\n{config['name']}:")
-            print(f"  Description: {config['description']}")
+        print(f"\n{config['name']}:")
+        print(f"  Description: {config['description']}")
+        print(f"  License: {config['license']}")
+        if "repo" in config:
             print(f"  Repository: {config['repo']}")
-            print(f"  License: {config['license']}")
+        if "huggingface_repo" in config:
+            print(f"  HuggingFace: https://huggingface.co/{config['huggingface_repo']}")
 
     print("\n" + "=" * 60)
 
@@ -242,7 +338,7 @@ def main():
         "--models",
         "-m",
         nargs="+",
-        choices=["stt", "tts", "vad", "face", "all"],
+        choices=["stt", "tts", "vad", "face", "lipsync", "portrait", "all"],
         default=["all"],
         help="Models to setup (default: all)",
     )
@@ -287,7 +383,7 @@ def main():
     # 모델 설정
     models_to_setup = args.models
     if "all" in models_to_setup:
-        models_to_setup = ["stt", "tts", "vad", "face"]
+        models_to_setup = ["stt", "tts", "vad", "face", "lipsync", "portrait"]
 
     results = {}
 
@@ -303,6 +399,10 @@ def main():
             results["vad"] = setup_vad()
         elif model == "face":
             results["face"] = setup_face()
+        elif model == "lipsync":
+            results["lipsync"] = setup_lipsync(args.device)
+        elif model == "portrait":
+            results["portrait"] = setup_portrait(args.device)
 
     # 결과 출력
     print("\n" + "=" * 60)
@@ -321,8 +421,8 @@ def main():
     print("-" * 60)
     print(f"Total: {success_count}/{len(results)} successful")
 
-    # 수동 설치 안내
-    print_manual_instructions()
+    # 모델 정보 출력
+    print_model_info()
 
     # 다음 단계 안내
     print("\n" + "=" * 60)

@@ -20,6 +20,7 @@ import numpy as np
 
 from ..models.emotion import Emotion, EmotionMapping
 from ..models.schemas import VideoFrame
+from ..models.integrations import MuseTalkModel, LivePortraitModel
 
 logger = logging.getLogger(__name__)
 
@@ -38,34 +39,47 @@ class AvatarRenderer:
     def __init__(
         self,
         idle_loops_dir: str = "assets/idle_loops",
+        avatar_image_path: Optional[str] = None,
         output_width: int = 512,
         output_height: int = 512,
         target_fps: int = 30,
         device: str = "cuda",
+        use_fp16: bool = True,
     ):
         """
         Initialize Avatar Renderer.
 
         Args:
             idle_loops_dir: Idle 루프 영상 디렉토리
+            avatar_image_path: 아바타 소스 이미지 경로
             output_width: 출력 비디오 너비
             output_height: 출력 비디오 높이
             target_fps: 목표 프레임 레이트
             device: Compute device
+            use_fp16: FP16 추론 사용 여부
         """
         self.idle_loops_dir = Path(idle_loops_dir)
+        self.avatar_image_path = avatar_image_path
         self.output_width = output_width
         self.output_height = output_height
         self.target_fps = target_fps
         self.device = device
+        self.use_fp16 = use_fp16
         self.frame_duration = 1.0 / target_fps
 
         # 상태
         self._idle_loops: Dict[Emotion, List[np.ndarray]] = {}
         self._current_emotion = Emotion.NEUTRAL
         self._current_frame_idx = 0
-        self._lipsync_model = None
+
+        # 모델 인스턴스
+        self._musetalk_model: Optional[MuseTalkModel] = None
+        self._live_portrait_model: Optional[LivePortraitModel] = None
         self._face_mesh = None
+
+        # 소스 이미지
+        self._source_image: Optional[np.ndarray] = None
+
         self._initialized = False
 
     async def initialize(self) -> None:
@@ -75,17 +89,45 @@ class AvatarRenderer:
 
         logger.info("Initializing Avatar Renderer...")
 
+        # 소스 이미지 로드
+        if self.avatar_image_path:
+            await self._load_source_image()
+
         # MediaPipe Face Mesh 초기화
         await self._init_face_mesh()
 
-        # MuseTalk 모델 초기화
+        # MuseTalk 립싱크 모델 초기화
         await self._init_lipsync_model()
 
-        # Idle 루프 로드
+        # LivePortrait 모델 초기화
+        await self._init_live_portrait_model()
+
+        # Idle 루프 로드 또는 생성
         await self._load_idle_loops()
 
         self._initialized = True
         logger.info("Avatar Renderer initialized successfully")
+
+    async def _load_source_image(self) -> None:
+        """소스 아바타 이미지 로드"""
+        if not self.avatar_image_path:
+            return
+
+        path = Path(self.avatar_image_path)
+        if not path.exists():
+            logger.warning(f"Avatar image not found: {path}")
+            return
+
+        try:
+            self._source_image = cv2.imread(str(path))
+            if self._source_image is not None:
+                self._source_image = cv2.resize(
+                    self._source_image,
+                    (self.output_width, self.output_height),
+                )
+                logger.info(f"Loaded avatar source image: {path}")
+        except Exception as e:
+            logger.error(f"Failed to load avatar image: {e}")
 
     async def _init_face_mesh(self) -> None:
         """MediaPipe Face Mesh 초기화"""
@@ -108,46 +150,110 @@ class AvatarRenderer:
     async def _init_lipsync_model(self) -> None:
         """MuseTalk 립싱크 모델 초기화"""
         try:
-            # MuseTalk 1.5 모델 로드
-            # Note: 실제 구현 시 MuseTalk 패키지에서 임포트
-            # from musetalk import MuseTalk
-            # self._lipsync_model = MuseTalk(device=self.device)
-
-            logger.info("MuseTalk model initialization placeholder")
-            # 실제 모델은 별도 설치 필요
-
-        except ImportError:
-            logger.warning(
-                "MuseTalk not installed. Lip sync will be disabled. "
-                "See: https://github.com/TMElyralab/MuseTalk"
+            self._musetalk_model = MuseTalkModel(
+                device=self.device,
+                fp16=self.use_fp16,
             )
+            success = await self._musetalk_model.initialize()
+
+            if success:
+                logger.info("MuseTalk model initialized successfully")
+            else:
+                logger.warning("MuseTalk initialization returned False, using fallback")
 
         except Exception as e:
             logger.error(f"Failed to initialize MuseTalk: {e}")
+            self._musetalk_model = None
+
+    async def _init_live_portrait_model(self) -> None:
+        """LivePortrait 얼굴 애니메이션 모델 초기화"""
+        try:
+            self._live_portrait_model = LivePortraitModel(
+                device=self.device,
+                output_size=(self.output_width, self.output_height),
+                fp16=self.use_fp16,
+            )
+            success = await self._live_portrait_model.initialize()
+
+            if success:
+                logger.info("LivePortrait model initialized successfully")
+
+                # 소스 이미지가 있으면 특징 추출
+                if self._source_image is not None:
+                    await self._live_portrait_model.extract_source_features(
+                        self._source_image
+                    )
+                    logger.info("Source image features extracted")
+            else:
+                logger.warning("LivePortrait initialization returned False, using fallback")
+
+        except Exception as e:
+            logger.error(f"Failed to initialize LivePortrait: {e}")
+            self._live_portrait_model = None
 
     async def _load_idle_loops(self) -> None:
-        """감정별 idle 루프 영상 로드"""
-        if not self.idle_loops_dir.exists():
-            logger.warning(f"Idle loops directory not found: {self.idle_loops_dir}")
-            # 기본 단색 프레임으로 대체
-            self._create_default_loops()
-            return
+        """감정별 idle 루프 영상 로드 또는 생성"""
+        self.idle_loops_dir.mkdir(parents=True, exist_ok=True)
 
         for emotion in Emotion:
             filename = EmotionMapping.get_idle_loop_filename(emotion)
             filepath = self.idle_loops_dir / filename
 
+            # 기존 루프 파일이 있으면 로드
             if filepath.exists():
                 frames = await self._load_video_frames(str(filepath))
                 if frames:
                     self._idle_loops[emotion] = frames
                     logger.info(f"Loaded idle loop: {filename} ({len(frames)} frames)")
-            else:
-                logger.debug(f"Idle loop not found: {filepath}")
+                    continue
 
+            # LivePortrait로 idle 루프 생성 시도
+            if self._live_portrait_model and self._source_image is not None:
+                frames = await self._generate_idle_loop_with_live_portrait(emotion)
+                if frames:
+                    self._idle_loops[emotion] = frames
+                    logger.info(f"Generated idle loop for {emotion.value}: {len(frames)} frames")
+                    continue
+
+            logger.debug(f"Idle loop not available for {emotion.value}")
+
+        # 루프가 하나도 없으면 기본 생성
         if not self._idle_loops:
-            logger.warning("No idle loops found. Creating default loops.")
+            logger.warning("No idle loops available. Creating default loops.")
             self._create_default_loops()
+
+    async def _generate_idle_loop_with_live_portrait(
+        self,
+        emotion: Emotion,
+        num_frames: int = 60,
+    ) -> Optional[List[np.ndarray]]:
+        """LivePortrait로 idle 루프 생성"""
+        if not self._live_portrait_model or self._source_image is None:
+            return None
+
+        try:
+            # 감정에 따른 모션 강도 설정
+            emotion_intensity = {
+                Emotion.NEUTRAL: 0.3,
+                Emotion.HAPPY: 0.5,
+                Emotion.SAD: 0.2,
+                Emotion.LISTENING: 0.4,
+                Emotion.THINKING: 0.35,
+            }
+            intensity = emotion_intensity.get(emotion, 0.3)
+
+            # LivePortrait로 프레임 시퀀스 생성
+            frames = await self._live_portrait_model.generate_idle_sequence(
+                emotion=emotion.value,
+                num_frames=num_frames,
+                motion_intensity=intensity,
+            )
+
+            return frames
+
+        except Exception as e:
+            logger.error(f"Failed to generate idle loop for {emotion.value}: {e}")
+            return None
 
     async def _load_video_frames(self, video_path: str) -> List[np.ndarray]:
         """비디오 파일을 프레임 리스트로 로드"""
@@ -356,23 +462,23 @@ class AvatarRenderer:
         Returns:
             립싱크 적용된 프레임
         """
-        if self._lipsync_model is None:
+        if self._musetalk_model is None:
             # 모델이 없으면 원본 반환
             return frame
 
         try:
-            # MuseTalk 추론
-            # lipsync_frame = await asyncio.get_event_loop().run_in_executor(
-            #     None,
-            #     lambda: self._lipsync_model.inference(
-            #         source_image=frame,
-            #         audio_chunk=audio_chunk,
-            #     ),
-            # )
-            # return lipsync_frame
+            # bytes를 numpy array로 변환
+            audio_array = np.frombuffer(audio_chunk, dtype=np.int16).astype(np.float32)
+            audio_array = audio_array / 32767.0  # Normalize to [-1, 1]
 
-            # Placeholder: 원본 반환
-            return frame
+            # MuseTalk 추론
+            lipsync_frame = await self._musetalk_model.process_frame(
+                source_frame=frame,
+                audio_chunk=audio_array,
+                audio_sample_rate=24000,  # 기본 샘플레이트
+            )
+
+            return lipsync_frame
 
         except Exception as e:
             logger.error(f"Lip sync error: {e}")
@@ -438,10 +544,15 @@ class AvatarRenderer:
             self._face_mesh.close()
             self._face_mesh = None
 
-        if self._lipsync_model:
-            del self._lipsync_model
-            self._lipsync_model = None
+        if self._musetalk_model:
+            await self._musetalk_model.cleanup()
+            self._musetalk_model = None
+
+        if self._live_portrait_model:
+            await self._live_portrait_model.cleanup()
+            self._live_portrait_model = None
 
         self._idle_loops.clear()
+        self._source_image = None
         self._initialized = False
         logger.info("Avatar Renderer cleaned up")
