@@ -1,0 +1,45 @@
+# LiveKit Server Configuration
+# https://docs.livekit.io/realtime/self-hosting/deployment/
+
+port: 7880
+rtc:
+  port_range_start: 50000
+  port_range_end: 60000
+  tcp_port: 7881
+  use_external_ip: false
+
+# API Keys (change in production!)
+keys:
+  # Format: api_key: api_secret
+  devkey: secret
+
+# Logging
+logging:
+  level: info
+  json: false
+
+# Room settings
+room:
+  # Maximum room duration in seconds (0 = unlimited)
+  empty_timeout: 300
+  # Maximum participants per room
+  max_participants: 10
+
+# Turn server settings (optional, for NAT traversal)
+# turn:
+#   enabled: true
+#   domain: turn.example.com
+#   tls_port: 5349
+#   udp_port: 443
+#   external_tls: true
+
+# Redis for multi-node deployments (optional)
+# redis:
+#   address: redis:6379
+#   db: 0
+
+# Webhook settings (optional)
+# webhook:
+#   urls:
+#     - http://avatar-api:8000/webhook/livekit
+#   api_key: webhookkey

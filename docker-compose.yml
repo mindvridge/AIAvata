@@ -1,0 +1,103 @@
+version: '3.8'
+
+services:
+  # Main Avatar API Server
+  avatar-api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: avatar-api
+    ports:
+      - "8000:8000"
+    environment:
+      - DEVICE=cuda
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - LLM_PROVIDER=${LLM_PROVIDER:-anthropic}
+      - LLM_MODEL=${LLM_MODEL:-claude-sonnet-4-20250514}
+      - LIVEKIT_API_KEY=${LIVEKIT_API_KEY}
+      - LIVEKIT_API_SECRET=${LIVEKIT_API_SECRET}
+      - LIVEKIT_URL=${LIVEKIT_URL:-ws://livekit:7880}
+      - REDIS_URL=redis://redis:6379/0
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+    volumes:
+      - ./assets:/app/assets
+      - ./logs:/app/logs
+      - ./models:/app/models
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    depends_on:
+      - redis
+      - livekit
+    restart: unless-stopped
+    networks:
+      - avatar-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  # LiveKit WebRTC Server
+  livekit:
+    image: livekit/livekit-server:latest
+    container_name: livekit
+    ports:
+      - "7880:7880"   # HTTP/WebSocket
+      - "7881:7881"   # RTC/TCP
+      - "7882:7882/udp"  # RTC/UDP
+    command: --config /etc/livekit.yaml
+    volumes:
+      - ./livekit.yaml:/etc/livekit.yaml
+    restart: unless-stopped
+    networks:
+      - avatar-network
+
+  # Redis for caching
+  redis:
+    image: redis:7-alpine
+    container_name: redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    command: redis-server --appendonly yes
+    restart: unless-stopped
+    networks:
+      - avatar-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  # Optional: Nginx reverse proxy
+  nginx:
+    image: nginx:alpine
+    container_name: nginx
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./ssl:/etc/nginx/ssl:ro
+    depends_on:
+      - avatar-api
+    restart: unless-stopped
+    networks:
+      - avatar-network
+    profiles:
+      - production
+
+volumes:
+  redis-data:
+
+networks:
+  avatar-network:
+    driver: bridge

@@ -1,0 +1,82 @@
+# Git
+.git
+.gitignore
+
+# Python
+__pycache__
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual environments
+venv/
+env/
+.env
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.nox/
+
+# Documentation
+docs/_build/
+
+# Logs
+logs/
+*.log
+
+# Large model files (download at runtime)
+models/
+*.pt
+*.pth
+*.onnx
+*.bin
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+
+# macOS
+.DS_Store
+
+# Frontend build (if using)
+frontend/node_modules/
+frontend/dist/
+frontend/build/
+
+# SSL certificates
+ssl/
+*.pem
+*.key
+*.crt
+
+# Secrets
+.env.local
+.env.production
+secrets/
