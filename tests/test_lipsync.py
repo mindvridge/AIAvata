@@ -18,6 +18,7 @@ def avatar_renderer():
         output_height=256,
         target_fps=30,
         device="cpu",
+        use_fp16=False,
     )
 
 
@@ -123,3 +124,123 @@ class TestEmotionMapping:
 
         assert EmotionMapping.get_idle_loop_filename(Emotion.NEUTRAL) == "neutral_idle.mp4"
         assert EmotionMapping.get_idle_loop_filename(Emotion.HAPPY) == "happy_smile.mp4"
+
+
+class TestAvatarRendererWithSourceImage:
+    """소스 이미지를 사용하는 Avatar Renderer 테스트"""
+
+    @pytest.fixture
+    def renderer_with_image(self, tmp_path):
+        """소스 이미지가 있는 Avatar Renderer fixture"""
+        import cv2
+
+        # 테스트 이미지 생성
+        test_image = np.random.randint(0, 255, (256, 256, 3), dtype=np.uint8)
+        image_path = tmp_path / "test_avatar.png"
+        cv2.imwrite(str(image_path), test_image)
+
+        return AvatarRenderer(
+            idle_loops_dir=str(tmp_path / "idle_loops"),
+            avatar_image_path=str(image_path),
+            output_width=256,
+            output_height=256,
+            target_fps=30,
+            device="cpu",
+            use_fp16=False,
+        )
+
+    @pytest.mark.asyncio
+    async def test_initialization_with_source_image(self, renderer_with_image):
+        """소스 이미지와 함께 초기화 테스트"""
+        await renderer_with_image.initialize()
+
+        assert renderer_with_image._initialized is True
+        assert renderer_with_image._source_image is not None
+
+    @pytest.mark.asyncio
+    async def test_frame_generation_with_source_image(self, renderer_with_image):
+        """소스 이미지로 프레임 생성 테스트"""
+        await renderer_with_image.initialize()
+
+        frame = renderer_with_image.get_idle_frame()
+
+        assert isinstance(frame, np.ndarray)
+        assert frame.shape == (256, 256, 3)
+
+    @pytest.mark.asyncio
+    async def test_lipsync_applies_to_frame(self, renderer_with_image):
+        """립싱크가 프레임에 적용되는지 테스트"""
+        await renderer_with_image.initialize()
+
+        # 원본 프레임
+        original_frame = renderer_with_image.get_idle_frame().copy()
+
+        # 오디오로 립싱크 적용
+        test_audio = np.random.randn(800).astype(np.float32) * 0.5
+        audio_bytes = (test_audio * 32767).astype(np.int16).tobytes()
+
+        lipsync_frame = await renderer_with_image._apply_lipsync(
+            original_frame,
+            audio_bytes,
+        )
+
+        assert isinstance(lipsync_frame, np.ndarray)
+        assert lipsync_frame.shape == original_frame.shape
+
+
+class TestLipSyncPerformance:
+    """립싱크 성능 테스트"""
+
+    @pytest.mark.asyncio
+    async def test_frame_rate_target(self):
+        """목표 프레임레이트 달성 테스트"""
+        import time
+
+        renderer = AvatarRenderer(
+            output_width=256,
+            output_height=256,
+            target_fps=30,
+            device="cpu",
+            use_fp16=False,
+        )
+        await renderer.initialize()
+
+        # 30프레임 렌더링 시간 측정
+        start = time.perf_counter()
+        for _ in range(30):
+            renderer.get_idle_frame()
+        elapsed = time.perf_counter() - start
+
+        fps = 30 / elapsed
+
+        await renderer.cleanup()
+
+        # CPU에서 최소 15 FPS (30의 절반)
+        assert fps >= 15, f"FPS too low for real-time: {fps:.1f}"
+
+    @pytest.mark.asyncio
+    async def test_emotion_switch_latency(self):
+        """감정 전환 지연시간 테스트"""
+        import time
+
+        renderer = AvatarRenderer(
+            output_width=256,
+            output_height=256,
+            target_fps=30,
+            device="cpu",
+            use_fp16=False,
+        )
+        await renderer.initialize()
+
+        emotions = [Emotion.NEUTRAL, Emotion.HAPPY, Emotion.SAD, Emotion.LISTENING]
+
+        for emotion in emotions:
+            start = time.perf_counter()
+            renderer.set_emotion(emotion)
+            renderer.get_idle_frame()  # 감정 변경 후 첫 프레임
+            elapsed = (time.perf_counter() - start) * 1000
+
+            # 감정 전환은 100ms 이내
+            assert elapsed < 100, f"Emotion switch too slow: {elapsed:.1f}ms"
+
+        await renderer.cleanup()

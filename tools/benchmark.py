@@ -293,6 +293,98 @@ class BenchmarkRunner:
             logger.error(f"VAD benchmark failed: {e}")
             return {"error": str(e)}
 
+    async def benchmark_musetalk(self) -> Dict[str, float]:
+        """MuseTalk 립싱크 벤치마크"""
+        logger.info("Benchmarking MuseTalk model...")
+
+        try:
+            from src.models.integrations import MuseTalkModel
+
+            model = MuseTalkModel(device=self.device, fp16=(self.device == "cuda"))
+            await model.initialize()
+
+            # 테스트 데이터
+            test_frame = np.random.randint(0, 255, (512, 512, 3), dtype=np.uint8)
+            test_audio = self._generate_test_audio(0.033)  # 1프레임 분량
+
+            times = []
+
+            # 워밍업
+            for _ in range(self.warmup_iterations):
+                await model.process_frame(test_frame, test_audio, 24000)
+
+            # 측정
+            for i in range(self.iterations):
+                start = time.perf_counter()
+                result = await model.process_frame(test_frame, test_audio, 24000)
+                elapsed = (time.perf_counter() - start) * 1000
+                times.append(elapsed)
+                logger.debug(f"  Iteration {i + 1}: {elapsed:.2f}ms")
+
+            await model.cleanup()
+
+            self.results["musetalk"] = times
+            stats = self._calculate_stats(times, "MuseTalk")
+
+            # FPS 계산
+            if stats["mean"] > 0:
+                stats["estimated_fps"] = 1000 / stats["mean"]
+
+            return stats
+
+        except Exception as e:
+            logger.error(f"MuseTalk benchmark failed: {e}")
+            return {"error": str(e)}
+
+    async def benchmark_live_portrait(self) -> Dict[str, float]:
+        """LivePortrait 벤치마크"""
+        logger.info("Benchmarking LivePortrait model...")
+
+        try:
+            from src.models.integrations import LivePortraitModel
+
+            model = LivePortraitModel(
+                device=self.device,
+                output_size=(512, 512),
+                fp16=(self.device == "cuda"),
+            )
+            await model.initialize()
+
+            # 소스 이미지 설정
+            test_image = np.random.randint(0, 255, (512, 512, 3), dtype=np.uint8)
+            await model.extract_source_features(test_image)
+
+            times = []
+
+            # 워밍업
+            for _ in range(self.warmup_iterations):
+                await model.generate_frame({"head_yaw": 0.1})
+
+            # 측정
+            for i in range(self.iterations):
+                start = time.perf_counter()
+                frame = await model.generate_frame(
+                    motion_params={"head_yaw": np.sin(i * 0.1) * 0.1}
+                )
+                elapsed = (time.perf_counter() - start) * 1000
+                times.append(elapsed)
+                logger.debug(f"  Iteration {i + 1}: {elapsed:.2f}ms")
+
+            await model.cleanup()
+
+            self.results["live_portrait"] = times
+            stats = self._calculate_stats(times, "LivePortrait")
+
+            # FPS 계산
+            if stats["mean"] > 0:
+                stats["estimated_fps"] = 1000 / stats["mean"]
+
+            return stats
+
+        except Exception as e:
+            logger.error(f"LivePortrait benchmark failed: {e}")
+            return {"error": str(e)}
+
     async def benchmark_full_pipeline(self) -> Dict[str, float]:
         """전체 파이프라인 벤치마크"""
         logger.info("Benchmarking full pipeline...")
@@ -431,7 +523,7 @@ async def main():
         "--component",
         "-c",
         nargs="+",
-        choices=["stt", "tts", "llm", "renderer", "vad", "pipeline", "all"],
+        choices=["stt", "tts", "llm", "renderer", "vad", "musetalk", "live_portrait", "pipeline", "all"],
         default=["all"],
         help="Components to benchmark",
     )
@@ -469,7 +561,7 @@ async def main():
 
     components = args.component
     if "all" in components:
-        components = ["stt", "tts", "vad", "renderer", "llm", "pipeline"]
+        components = ["stt", "tts", "vad", "renderer", "musetalk", "live_portrait", "llm", "pipeline"]
 
     results = {}
 
@@ -484,6 +576,10 @@ async def main():
             results["renderer"] = await runner.benchmark_avatar_renderer()
         elif component == "vad":
             results["vad"] = await runner.benchmark_vad()
+        elif component == "musetalk":
+            results["musetalk"] = await runner.benchmark_musetalk()
+        elif component == "live_portrait":
+            results["live_portrait"] = await runner.benchmark_live_portrait()
         elif component == "pipeline":
             results["pipeline"] = await runner.benchmark_full_pipeline()
 
