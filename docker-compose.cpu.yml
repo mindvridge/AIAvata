@@ -1,22 +1,25 @@
 version: '3.8'
 
+# CPU-only configuration for AI Avatar Service
+# Use this when GPU is not available
+
 services:
-  # Main Avatar API Server
+  # Main Avatar API Server (CPU mode)
   avatar-api:
     build:
       context: .
       dockerfile: Dockerfile
       args:
         - BUILDKIT_INLINE_CACHE=1
-    image: ai-avatar-service:latest
+    image: ai-avatar-service:cpu
     container_name: avatar-api
     ports:
       - "8000:8000"
     environment:
-      # Device settings
-      - DEVICE=cuda
-      - CUDA_VISIBLE_DEVICES=0
-      - OMP_NUM_THREADS=4
+      # Device settings - CPU only
+      - DEVICE=cpu
+      - CUDA_VISIBLE_DEVICES=""
+      - OMP_NUM_THREADS=8
       # API Keys
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
       - OPENAI_API_KEY=${OPENAI_API_KEY}
@@ -34,10 +37,10 @@ services:
       - TORCH_HOME=/app/models/torch
       - MUSETALK_MODEL_DIR=/app/models/musetalk
       - LIVEPORTRAIT_MODEL_DIR=/app/models/liveportrait
-      # Performance tuning
-      - TARGET_FPS=${TARGET_FPS:-30}
-      - VIDEO_WIDTH=${VIDEO_WIDTH:-512}
-      - VIDEO_HEIGHT=${VIDEO_HEIGHT:-512}
+      # Performance tuning (reduced for CPU)
+      - TARGET_FPS=${TARGET_FPS:-15}
+      - VIDEO_WIDTH=${VIDEO_WIDTH:-256}
+      - VIDEO_HEIGHT=${VIDEO_HEIGHT:-256}
       - TTS_SAMPLE_RATE=${TTS_SAMPLE_RATE:-24000}
       # Logging
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
@@ -47,13 +50,9 @@ services:
       - model-cache:/app/models
     deploy:
       resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: 1
-              capabilities: [gpu]
         limits:
-          memory: 16G
+          memory: 8G
+          cpus: '4'
     depends_on:
       redis:
         condition: service_healthy
@@ -67,7 +66,7 @@ services:
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 120s
+      start_period: 180s  # Longer startup for CPU
 
   # LiveKit WebRTC Server
   livekit:
@@ -102,28 +101,10 @@ services:
       timeout: 5s
       retries: 3
 
-  # Optional: Nginx reverse proxy
-  nginx:
-    image: nginx:alpine
-    container_name: nginx
-    ports:
-      - "80:80"
-      - "443:443"
-    volumes:
-      - ./nginx.conf:/etc/nginx/nginx.conf:ro
-      - ./ssl:/etc/nginx/ssl:ro
-    depends_on:
-      - avatar-api
-    restart: unless-stopped
-    networks:
-      - avatar-network
-    profiles:
-      - production
-
 volumes:
   redis-data:
   model-cache:
-    name: ai-avatar-model-cache
+    name: ai-avatar-model-cache-cpu
 
 networks:
   avatar-network:
