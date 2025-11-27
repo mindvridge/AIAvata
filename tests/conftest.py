@@ -14,6 +14,14 @@ project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
 
+def pytest_configure(config):
+    """Configure pytest markers."""
+    config.addinivalue_line("markers", "slow: marks tests as slow")
+    config.addinivalue_line("markers", "e2e: marks tests as end-to-end")
+    config.addinivalue_line("markers", "integration: marks tests as integration")
+    config.addinivalue_line("markers", "gpu: marks tests requiring GPU")
+
+
 @pytest.fixture(scope="session")
 def event_loop():
     """Create event loop for async tests"""
@@ -50,3 +58,10 @@ def sample_audio_bytes(sample_audio):
     """Generate sample audio bytes"""
     import numpy as np
     return (sample_audio * 32767).astype(np.int16).tobytes()
+
+
+@pytest.fixture
+def sample_video_frame():
+    """Generate sample video frame (512x512 RGB)"""
+    import numpy as np
+    return np.zeros((512, 512, 3), dtype=np.uint8)
