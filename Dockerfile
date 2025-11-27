@@ -57,8 +57,11 @@ RUN pip install --no-cache-dir \
     torchaudio==2.1.0+cu121 \
     --index-url https://download.pytorch.org/whl/cu121
 
-# Install numpy first (required by pkuseg build)
-RUN pip install --no-cache-dir numpy>=1.24.0
+# Install build dependencies first (required by pkuseg)
+RUN pip install --no-cache-dir numpy>=1.24.0 cython
+
+# Install pkuseg separately with no build isolation
+RUN pip install --no-cache-dir --no-build-isolation pkuseg
 
 # Install HuggingFace Hub for model downloads
 RUN pip install --no-cache-dir huggingface_hub>=0.20.0
