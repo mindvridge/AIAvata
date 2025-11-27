@@ -97,18 +97,23 @@ class Settings(BaseSettings):
         return self.openai_api_key
 
     def get_device(self) -> str:
-        """Get the compute device, with fallback to CPU if CUDA is not available."""
-        if self.device == "cuda":
-            try:
-                import torch
+        """Get the compute device, with fallback to CPU if GPU is not available."""
+        try:
+            import torch
 
+            if self.device == "cuda":
                 if torch.cuda.is_available():
                     return "cuda"
                 print("CUDA not available, falling back to CPU")
                 return "cpu"
-            except ImportError:
+            elif self.device == "mps":
+                if torch.backends.mps.is_available():
+                    return "mps"
+                print("MPS not available, falling back to CPU")
                 return "cpu"
-        return self.device
+            return self.device
+        except ImportError:
+            return "cpu"
 
 
 @lru_cache

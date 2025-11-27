@@ -60,12 +60,12 @@ async def health_check(settings: Settings = Depends(get_settings)):
     Returns:
         HealthResponse: 서버 상태 정보
     """
-    # GPU 가용성 확인
+    # GPU 가용성 확인 (CUDA 또는 MPS)
     gpu_available = False
     try:
         import torch
-        gpu_available = torch.cuda.is_available()
-    except ImportError:
+        gpu_available = torch.cuda.is_available() or torch.backends.mps.is_available()
+    except (ImportError, AttributeError):
         pass
 
     return HealthResponse(

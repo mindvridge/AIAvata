@@ -134,8 +134,8 @@ Desktop.ini
 # Linux
 *~
 
-# Model files (large)
-models/
+# Model files (large) - only root level models directory
+/models/
 *.pt
 *.pth
 *.onnx
