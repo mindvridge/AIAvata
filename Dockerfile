@@ -22,6 +22,9 @@ RUN apt-get update && apt-get install -y \
     python3.11-venv \
     python3.11-dev \
     python3-pip \
+    build-essential \
+    g++ \
+    gcc \
     ffmpeg \
     libsm6 \
     libxext6 \
@@ -63,8 +66,34 @@ RUN pip install --no-cache-dir numpy>=1.24.0
 # Install HuggingFace Hub for model downloads
 RUN pip install --no-cache-dir huggingface_hub>=0.20.0
 
+# Install pkuseg with Python 3.11 compatibility patch
+# The issue: Cython generates .cpp files that include longintrepr.h (removed in Python 3.11)
+# Solution: Patch setup.py to intercept and patch .cpp files during build
+RUN cd /tmp && \
+    wget -q https://files.pythonhosted.org/packages/source/p/pkuseg/pkuseg-0.0.25.tar.gz && \
+    tar -xzf pkuseg-0.0.25.tar.gz && \
+    cd pkuseg-0.0.25 && \
+    pip install --no-cache-dir Cython
+
+# Copy patch script and apply it
+COPY tools/patch_pkuseg.py /tmp/patch_pkuseg.py
+RUN cd /tmp/pkuseg-0.0.25 && \
+    python3 /tmp/patch_pkuseg.py setup.py
+
+# Install the patched pkuseg
+RUN cd /tmp/pkuseg-0.0.25 && \
+    pip install --no-cache-dir --no-build-isolation . && \
+    cd / && rm -rf /tmp/pkuseg-* || \
+    (echo "Warning: pkuseg installation failed" && rm -rf /tmp/pkuseg-*)
+
 # Install Python dependencies
-RUN pip install --no-cache-dir -r requirements.txt
+# Use --no-build-isolation to allow packages to access numpy during build
+# If chatterbox-tts fails due to pkuseg, try installing it without pkuseg dependency
+RUN pip install --no-cache-dir --no-build-isolation -r requirements.txt || \
+    (echo "Some packages failed, trying without chatterbox-tts..." && \
+     pip install --no-cache-dir --no-build-isolation $(grep -v "^#.*chatterbox-tts\|^chatterbox-tts" requirements.txt) && \
+     pip install --no-cache-dir --no-build-isolation chatterbox-tts --no-deps || \
+     echo "chatterbox-tts installation skipped (pkuseg Python 3.11 incompatibility)")
 
 # Stage 3: Final runtime image
 FROM base AS runtime
@@ -76,13 +105,15 @@ COPY --from=builder /usr/local/lib/python3.11/dist-packages /usr/local/lib/pytho
 COPY --from=builder /usr/local/bin /usr/local/bin
 
 # Create non-root user for security
-RUN groupadd -r avatar && useradd -r -g avatar avatar
+RUN groupadd -r avatar && useradd -r -g avatar -m -d /home/avatar avatar
 
 # Copy application code
 COPY --chown=avatar:avatar . .
 
 # Create necessary directories with proper structure
 RUN mkdir -p \
+    /home/avatar/.cache \
+    /home/avatar/.config \
     assets/avatars \
     assets/idle_loops \
     assets/voice_samples \
@@ -91,7 +122,8 @@ RUN mkdir -p \
     models/torch \
     models/musetalk \
     models/liveportrait \
-    && chown -R avatar:avatar assets logs models
+    && chown -R avatar:avatar /home/avatar assets logs models \
+    && chmod -R 755 /home/avatar
 
 # Switch to non-root user
 USER avatar

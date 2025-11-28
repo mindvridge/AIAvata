@@ -45,6 +45,7 @@ class LiveKitService:
         self.url = url
 
         self._api = None
+        self._access_token = None
         self._initialized = False
 
     async def initialize(self) -> None:
@@ -56,8 +57,10 @@ class LiveKitService:
 
         try:
             from livekit import api
+            from livekit.api import access_token
 
             self._api = api
+            self._access_token = access_token
             self._initialized = True
             logger.info("LiveKit Service initialized")
 
@@ -98,8 +101,8 @@ class LiveKitService:
 
         identity = participant_identity or participant_name
 
-        # AccessToken 생성
-        token = self._api.AccessToken(
+        # AccessToken 생성 (access_token 모듈 사용)
+        token = self._access_token.AccessToken(
             api_key=self.api_key,
             api_secret=self.api_secret,
         )
@@ -109,8 +112,8 @@ class LiveKitService:
         token.with_name(participant_name)
         token.with_ttl(ttl)
 
-        # VideoGrant 설정
-        grant = self._api.VideoGrant(
+        # VideoGrants 설정 (VideoGrant가 아닌 VideoGrants 사용)
+        grant = self._access_token.VideoGrants(
             room_join=True,
             room=room_name,
             can_publish=can_publish,
@@ -310,5 +313,6 @@ class LiveKitService:
     async def cleanup(self) -> None:
         """리소스 정리"""
         self._api = None
+        self._access_token = None
         self._initialized = False
         logger.info("LiveKit Service cleaned up")

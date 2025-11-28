@@ -310,3 +310,8 @@ def set_websocket_handler(pipeline):
     global websocket_handler
     websocket_handler = AvatarWebSocketHandler(pipeline)
     return websocket_handler
+
+
+def get_websocket_handler() -> Optional[AvatarWebSocketHandler]:
+    """WebSocket 핸들러 반환 (getter 함수)"""
+    return websocket_handler

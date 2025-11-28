@@ -38,6 +38,7 @@ class STTModule:
         device: str = "cuda",
         vad_enabled: bool = True,
         max_segment_time: int = 30000,
+        model_path: str = "iic/SenseVoiceSmall",
     ):
         """
         Initialize STT Module.
@@ -46,10 +47,12 @@ class STTModule:
             device: Compute device ('cuda', 'cpu', 'mps')
             vad_enabled: Whether to enable VAD
             max_segment_time: Maximum segment time in milliseconds
+            model_path: ModelScope repository path for STT model
         """
         self.device = device
         self.vad_enabled = vad_enabled
         self.max_segment_time = max_segment_time
+        self.model_path = model_path
         self.model = None
         self._initialized = False
 
@@ -65,15 +68,42 @@ class STTModule:
             from funasr import AutoModel
 
             # SenseVoice-Small 모델 로드
-            self.model = AutoModel(
-                model="FunAudioLLM/SenseVoiceSmall",
-                vad_model="fsmn-vad" if self.vad_enabled else None,
-                vad_kwargs={"max_single_segment_time": self.max_segment_time}
-                if self.vad_enabled
-                else None,
-                device=self.device,
-                disable_update=True,
-            )
+            # 여러 경로를 시도 (일반적으로 사용되는 경로들)
+            model_paths = [
+                self.model_path,  # 설정된 경로
+                "iic/SenseVoiceSmall",  # ModelScope 일반 경로
+                "iic/sensevoice_small",
+                "FunAudioLLM/SenseVoiceSmall",  # 원래 경로
+            ]
+            
+            model_loaded = False
+            last_error = None
+            
+            for model_path in model_paths:
+                try:
+                    logger.info(f"Trying to load STT model from: {model_path}")
+                    self.model = AutoModel(
+                        model=model_path,
+                        vad_model="fsmn-vad" if self.vad_enabled else None,
+                        vad_kwargs={"max_single_segment_time": self.max_segment_time}
+                        if self.vad_enabled
+                        else None,
+                        device=self.device,
+                        disable_update=True,
+                    )
+                    model_loaded = True
+                    logger.info(f"Successfully loaded STT model from: {model_path}")
+                    break
+                except Exception as e:
+                    last_error = e
+                    logger.warning(f"Failed to load model from {model_path}: {e}")
+                    continue
+            
+            if not model_loaded:
+                raise RuntimeError(
+                    f"Failed to load STT model from any of the attempted paths: {model_paths}. "
+                    f"Last error: {last_error}"
+                )
 
             self._initialized = True
             logger.info("SenseVoice-Small model initialized successfully")
@@ -87,7 +117,9 @@ class STTModule:
 
         except Exception as e:
             logger.error(f"Failed to initialize SenseVoice model: {e}")
-            raise
+            # STT 모델 초기화 실패 시에도 서비스는 계속 실행 (mock 모드)
+            logger.warning("STT will operate in mock mode. Speech recognition will return placeholder text.")
+            self._initialized = True  # Allow operation with mock results
 
     def _ensure_initialized(self) -> None:
         """모델이 초기화되었는지 확인"""

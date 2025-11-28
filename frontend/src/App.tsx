@@ -10,9 +10,10 @@ import {
   AudioRecorder,
   Controls,
   StatusBar,
-  ConversationPanel
+  ConversationPanel,
+  ErrorLogPanel,
 } from './components';
-import { useAvatarSession } from './hooks';
+import { useAvatarSession, useErrorLogger } from './hooks';
 import type { Emotion, ConnectionState } from './types';
 
 // Message type for conversation history
@@ -31,6 +32,7 @@ function App() {
     pipelineState,
     emotion,
     isConnected,
+    connectionState,
     error,
     createSession,
     sendAudio,
@@ -42,20 +44,27 @@ function App() {
   });
 
   // Local state
-  const [connectionState, setConnectionState] = useState<ConnectionState>('disconnected');
   const [messages, setMessages] = useState<Message[]>([]);
   const [currentTranscript, setCurrentTranscript] = useState('');
   const [isRecording, setIsRecording] = useState(false);
   const [isMuted, setIsMuted] = useState(false);
   const [showConversation, setShowConversation] = useState(true);
+  const [showErrorLog, setShowErrorLog] = useState(false);
+  const [isConnecting, setIsConnecting] = useState(false);
+
+  // Error logger
+  const {
+    logs: errorLogs,
+    addError,
+    addWarning,
+    addInfo,
+    clearLogs: clearErrorLogs,
+    errorCount,
+    warningCount,
+  } = useErrorLogger();
 
   // Refs
   const canvasRef = useRef<HTMLCanvasElement>(null);
-
-  // Update connection state
-  useEffect(() => {
-    setConnectionState(isConnected ? 'connected' : 'disconnected');
-  }, [isConnected]);
 
   // Handle video frames from WebSocket
   function handleVideoFrame(data: ArrayBuffer) {
@@ -86,16 +95,26 @@ function App() {
   // Connect handler
   const handleConnect = useCallback(async () => {
     try {
-      setConnectionState('connecting');
+      setIsConnecting(true);
+      addInfo('세션 생성 중...', 'Connection');
       await createSession({
         avatarId: 'default',
         language: 'ko',
       });
+      addInfo('세션이 성공적으로 생성되었습니다. WebSocket 연결 중...', 'Connection');
     } catch (err) {
-      console.error('Failed to connect:', err);
-      setConnectionState('error');
+      const errorMessage = err instanceof Error ? err.message : '연결 실패';
+      addError(`연결 실패: ${errorMessage}`, 'Connection', { error: err });
+      setIsConnecting(false);
     }
-  }, [createSession]);
+  }, [createSession, addError, addInfo]);
+
+  // WebSocket 연결 상태가 변경되면 isConnecting 업데이트
+  useEffect(() => {
+    if (connectionState === 'connected' || connectionState === 'error') {
+      setIsConnecting(false);
+    }
+  }, [connectionState]);
 
   // Disconnect handler
   const handleDisconnect = useCallback(() => {
@@ -160,6 +179,17 @@ function App() {
               >
                 {showConversation ? '대화 숨기기' : '대화 보기'}
               </button>
+              <button
+                onClick={() => setShowErrorLog(!showErrorLog)}
+                className="relative px-3 py-1.5 text-sm bg-gray-700 hover:bg-gray-600 rounded-lg transition-colors flex items-center gap-2"
+              >
+                <span>에러 로그</span>
+                {(errorCount > 0 || warningCount > 0) && (
+                  <span className="absolute -top-1 -right-1 w-5 h-5 bg-red-500 text-white text-xs rounded-full flex items-center justify-center">
+                    {errorCount + warningCount}
+                  </span>
+                )}
+              </button>
             </div>
           </div>
         </div>
@@ -184,7 +214,7 @@ function App() {
                 emotion={emotion}
                 pipelineState={pipelineState}
                 isConnected={isConnected}
-                isLoading={connectionState === 'connecting'}
+                isLoading={connectionState === 'connecting' || isConnecting}
                 width={512}
                 height={512}
               />
@@ -257,6 +287,14 @@ function App() {
           </div>
         </div>
       </footer>
+
+      {/* Error Log Panel */}
+      <ErrorLogPanel
+        isOpen={showErrorLog}
+        onClose={() => setShowErrorLog(false)}
+        logs={errorLogs}
+        onClear={clearErrorLogs}
+      />
     </div>
   );
 }

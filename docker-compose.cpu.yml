@@ -37,6 +37,8 @@ services:
       - TORCH_HOME=/app/models/torch
       - MUSETALK_MODEL_DIR=/app/models/musetalk
       - LIVEPORTRAIT_MODEL_DIR=/app/models/liveportrait
+      # STT Model Configuration
+      - STT_MODEL_PATH=${STT_MODEL_PATH:-iic/SenseVoiceSmall}
       # Performance tuning (reduced for CPU)
       - TARGET_FPS=${TARGET_FPS:-15}
       - VIDEO_WIDTH=${VIDEO_WIDTH:-256}

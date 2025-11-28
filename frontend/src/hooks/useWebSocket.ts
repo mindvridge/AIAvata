@@ -23,7 +23,7 @@ interface UseWebSocketReturn {
   connectionState: ConnectionState;
   pipelineState: PipelineState;
   emotion: Emotion;
-  connect: () => void;
+  connect: (customUrl?: string) => void;
   disconnect: () => void;
   sendAudio: (data: ArrayBuffer) => void;
   sendMessage: (message: WebSocketMessage) => void;
@@ -47,6 +47,12 @@ export function useWebSocket(options: UseWebSocketOptions): UseWebSocketReturn {
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectTimeoutRef = useRef<number | null>(null);
   const isIntentionalDisconnect = useRef(false);
+  const urlRef = useRef<string>(url); // URL을 ref로 관리하여 항상 최신 값 사용
+
+  // URL prop이 변경되면 ref 업데이트
+  useEffect(() => {
+    urlRef.current = url;
+  }, [url]);
 
   const handleMessage = useCallback((event: MessageEvent) => {
     // Binary data is video frame
@@ -91,17 +97,28 @@ export function useWebSocket(options: UseWebSocketOptions): UseWebSocketReturn {
     }
   }, [onMessage, onVideoFrame]);
 
-  const connect = useCallback(() => {
+  const connect = useCallback((customUrl?: string) => {
     if (wsRef.current?.readyState === WebSocket.OPEN) {
       return;
     }
+
+    // 커스텀 URL이 제공되면 사용하고, 없으면 ref의 최신 URL 사용
+    const targetUrl = customUrl || urlRef.current;
+    
+    if (!targetUrl) {
+      console.error('WebSocket URL is not set');
+      setError(new Error('WebSocket URL is not set'));
+      return;
+    }
+
+    console.log('Connecting to WebSocket:', targetUrl); // 디버깅용 로그
 
     isIntentionalDisconnect.current = false;
     setError(null);
     setConnectionState('connecting');
 
     try {
-      const ws = new WebSocket(url);
+      const ws = new WebSocket(targetUrl);
       ws.binaryType = 'arraybuffer';
 
       ws.onopen = () => {
@@ -114,19 +131,34 @@ export function useWebSocket(options: UseWebSocketOptions): UseWebSocketReturn {
 
       ws.onerror = (event) => {
         console.error('WebSocket error:', event);
-        setError(new Error('WebSocket connection error'));
+        console.error('Failed URL:', targetUrl);
+        setError(new Error(`WebSocket connection error: ${targetUrl}`));
         setConnectionState('error');
       };
 
-      ws.onclose = () => {
-        console.log('WebSocket closed');
+      ws.onclose = (event) => {
+        console.log('WebSocket closed', {
+          code: event.code,
+          reason: event.reason,
+          wasClean: event.wasClean,
+          url: targetUrl
+        });
         setConnectionState('disconnected');
         wsRef.current = null;
 
-        // Auto reconnect
-        if (autoReconnect && !isIntentionalDisconnect.current) {
+        // 정상 종료가 아닌 경우에만 에러 처리
+        if (!event.wasClean && event.code !== 1000) {
+          console.error('WebSocket closed unexpectedly', {
+            code: event.code,
+            reason: event.reason,
+          });
+        }
+
+        // Auto reconnect (정상 종료가 아니고 의도적 종료가 아닌 경우)
+        if (autoReconnect && !isIntentionalDisconnect.current && !event.wasClean) {
           console.log(`Reconnecting in ${reconnectInterval}ms...`);
           reconnectTimeoutRef.current = window.setTimeout(() => {
+            // 재연결 시에도 커스텀 URL이 없으면 ref의 최신 URL 사용
             connect();
           }, reconnectInterval);
         }
@@ -138,7 +170,7 @@ export function useWebSocket(options: UseWebSocketOptions): UseWebSocketReturn {
       setError(err instanceof Error ? err : new Error('Failed to connect'));
       setConnectionState('error');
     }
-  }, [url, handleMessage, autoReconnect, reconnectInterval]);
+  }, [handleMessage, autoReconnect, reconnectInterval]); // url 제거 - ref 사용
 
   const disconnect = useCallback(() => {
     isIntentionalDisconnect.current = true;
@@ -167,6 +199,23 @@ export function useWebSocket(options: UseWebSocketOptions): UseWebSocketReturn {
       wsRef.current.send(JSON.stringify(message));
     }
   }, []);
+
+  // URL이 변경되면 ref 업데이트 및 기존 연결 정리
+  useEffect(() => {
+    if (url) {
+      urlRef.current = url;
+      console.log('useWebSocket URL updated to:', url);
+      
+      // URL이 변경되었고 기존 연결이 열려있으면 재연결
+      if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+        // 의도적인 연결 해제가 아닌 경우에만 재연결
+        if (!isIntentionalDisconnect.current) {
+          console.log('Closing existing connection due to URL change');
+          wsRef.current.close();
+        }
+      }
+    }
+  }, [url]);
 
   // Cleanup on unmount
   useEffect(() => {

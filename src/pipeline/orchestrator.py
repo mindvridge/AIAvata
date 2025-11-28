@@ -55,6 +55,7 @@ class PipelineOrchestrator:
         self.stt = STTModule(
             device=settings.get_device(),
             vad_enabled=True,
+            model_path=settings.stt_model_path,
         )
 
         self.llm = LLMModule(

@@ -19,7 +19,7 @@ from .pipeline.orchestrator import PipelineOrchestrator
 from .services.livekit_service import LiveKitService
 from .services.tts_cache_service import TTSCacheService
 from .api.routes import router, set_services
-from .api.websocket import set_websocket_handler, websocket_handler
+from .api.websocket import set_websocket_handler, get_websocket_handler
 
 # 로깅 설정
 logging.basicConfig(
@@ -109,12 +109,14 @@ app = FastAPI(
 )
 
 # CORS 설정
+# 개발 환경에서는 모든 origin 허용 (WebSocket 연결을 위해 필요)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # 프로덕션에서는 특정 도메인만 허용
-    allow_credentials=True,
+    allow_origins=["*"],  # 개발 환경: 모든 origin 허용
+    allow_credentials=False,  # allow_origins가 "*"일 때는 False여야 함
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=["*"],
 )
 
 # 라우터 등록
@@ -130,11 +132,12 @@ async def avatar_websocket_endpoint(websocket: WebSocket):
     - Client → Server: 오디오 청크 (bytes) 또는 제어 메시지 (JSON)
     - Server → Client: 비디오 프레임 (bytes) 또는 상태 메시지 (JSON)
     """
-    if websocket_handler is None:
+    handler = get_websocket_handler()
+    if handler is None:
         await websocket.close(code=1011, reason="Service not initialized")
         return
 
-    await websocket_handler.handle_connection(websocket)
+    await handler.handle_connection(websocket)
 
 
 @app.websocket("/ws/avatar/{session_id}")
@@ -148,11 +151,12 @@ async def avatar_session_websocket_endpoint(
     Args:
         session_id: 아바타 세션 ID
     """
-    if websocket_handler is None:
+    handler = get_websocket_handler()
+    if handler is None:
         await websocket.close(code=1011, reason="Service not initialized")
         return
 
-    await websocket_handler.handle_connection(websocket, session_id)
+    await handler.handle_connection(websocket, session_id)
 
 
 def run():

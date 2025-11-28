@@ -82,6 +82,12 @@ class Settings(BaseSettings):
     tts_chunk_size: int = Field(
         default=4096, description="TTS audio chunk size in bytes"
     )
+    
+    # STT Model Settings
+    stt_model_path: str = Field(
+        default="iic/SenseVoiceSmall",
+        description="STT model path (ModelScope repository path)"
+    )
 
     # Server Settings
     host: str = Field(default="0.0.0.0", description="Server host")

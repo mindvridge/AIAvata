@@ -38,7 +38,7 @@ export function StatusBar({
   useEffect(() => {
     const fetchHealth = async () => {
       try {
-        const response = await api.health();
+        const response = await api.healthCheck();
         setHealth(response);
       } catch (err) {
         setHealth(null);
@@ -50,22 +50,11 @@ export function StatusBar({
     return () => clearInterval(interval);
   }, []);
 
-  // Fetch metrics if enabled
+  // Fetch metrics if enabled (placeholder for future implementation)
   useEffect(() => {
     if (!showMetrics) return;
-
-    const fetchMetrics = async () => {
-      try {
-        const response = await api.getMetrics();
-        setMetrics(response);
-      } catch (err) {
-        // Ignore errors
-      }
-    };
-
-    fetchMetrics();
-    const interval = setInterval(fetchMetrics, 5000);
-    return () => clearInterval(interval);
+    // Metrics API not yet implemented
+    setMetrics(null);
   }, [showMetrics]);
 
   const formatUptime = (seconds: number): string => {

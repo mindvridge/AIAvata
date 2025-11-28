@@ -8,7 +8,8 @@ import type {
   PipelineState,
   Emotion,
   AvatarConfig,
-  UseAvatarSessionReturn
+  UseAvatarSessionReturn,
+  ConnectionState
 } from '../types';
 import { api } from '../lib/api';
 import { useWebSocket } from './useWebSocket';
@@ -25,6 +26,7 @@ export function useAvatarSession(
 
   const [session, setSession] = useState<AvatarSession | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [wsUrl, setWsUrl] = useState<string>('');
 
   const wsUrlRef = useRef<string>('');
 
@@ -51,7 +53,7 @@ export function useAvatarSession(
     sendAudio,
     sendMessage,
   } = useWebSocket({
-    url: getWsUrl(),
+    url: wsUrl || getWsUrl(), // 초기 URL 설정 (세션 생성 후 업데이트됨)
     onVideoFrame: handleVideoFrame,
     autoReconnect: true,
   });
@@ -63,13 +65,32 @@ export function useAvatarSession(
       // Create session via API
       const response = await api.createSession(config);
 
+      // API 응답은 snake_case이므로 camelCase로 변환
+      const sessionId = (response as any).session_id || response.sessionId;
+      const avatarId = (response as any).avatar_id || response.avatarId;
+      let websocketUrl = (response as any).websocket_url || response.websocketUrl;
+
+      // 0.0.0.0을 localhost로 변환 (브라우저에서 0.0.0.0으로 연결할 수 없음)
+      if (websocketUrl && websocketUrl.includes('0.0.0.0')) {
+        websocketUrl = websocketUrl.replace('0.0.0.0', 'localhost');
+      }
+
+      // Vite 프록시가 불안정하므로 개발 환경에서도 백엔드로 직접 연결
+      // 프로덕션에서는 백엔드 URL 직접 사용
+      // 참고: CORS가 활성화되어 있으므로 직접 연결 가능
+
+      console.log('Session created:', sessionId);
+      console.log('Original WebSocket URL:', (response as any).websocket_url || response.websocketUrl);
+      console.log('Processed WebSocket URL:', websocketUrl);
+
       // Update WebSocket URL with session ID
-      wsUrlRef.current = response.websocketUrl;
+      wsUrlRef.current = websocketUrl;
+      setWsUrl(websocketUrl); // URL 상태 업데이트로 useWebSocket이 새로운 URL 사용
 
       // Set session state
       setSession({
-        sessionId: response.sessionId,
-        avatarId: response.avatarId,
+        sessionId: sessionId,
+        avatarId: avatarId,
         currentEmotion: 'neutral',
         pipelineState: 'idle',
         totalInteractions: 0,
@@ -77,17 +98,15 @@ export function useAvatarSession(
         lastActivity: new Date().toISOString(),
       });
 
-      // Connect WebSocket
-      if (autoConnect) {
-        wsConnect();
-      }
-
-      console.log('Session created:', response.sessionId);
+      // Connect WebSocket with the new URL directly (세션 생성 후 자동 연결)
+      // 커스텀 URL을 직접 전달하여 상태 업데이트 대기 없이 즉시 연결
+      console.log('Calling wsConnect with URL:', websocketUrl);
+      wsConnect(websocketUrl);
     } catch (err) {
       console.error('Failed to create session:', err);
       setError(err instanceof Error ? err.message : 'Failed to create session');
     }
-  }, [autoConnect, wsConnect]);
+  }, [wsConnect]);
 
   const setEmotion = useCallback((newEmotion: Emotion) => {
     sendMessage({
@@ -106,6 +125,7 @@ export function useAvatarSession(
 
     setSession(null);
     wsUrlRef.current = '';
+    setWsUrl(''); // URL 상태 초기화
   }, [wsDisconnect, session]);
 
   return {
@@ -113,6 +133,7 @@ export function useAvatarSession(
     pipelineState,
     emotion,
     isConnected,
+    connectionState,
     error,
     createSession,
     sendAudio,

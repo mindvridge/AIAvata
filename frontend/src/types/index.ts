@@ -144,6 +144,7 @@ export interface UseAvatarSessionReturn {
   pipelineState: PipelineState;
   emotion: Emotion;
   isConnected: boolean;
+  connectionState: ConnectionState;
   error: string | null;
   createSession: (config?: AvatarConfig) => Promise<void>;
   sendAudio: (data: ArrayBuffer) => void;
