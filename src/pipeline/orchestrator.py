@@ -72,6 +72,7 @@ class PipelineOrchestrator:
 
         self.renderer = AvatarRenderer(
             idle_loops_dir=settings.idle_loops_dir,
+            avatar_image_path=settings.default_avatar_image,
             output_width=settings.video_width,
             output_height=settings.video_height,
             target_fps=settings.target_fps,

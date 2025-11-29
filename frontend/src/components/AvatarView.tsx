@@ -15,6 +15,7 @@ interface AvatarViewProps {
   isConnected?: boolean;
   isLoading?: boolean;
   videoTrack?: MediaStreamTrack | null;
+  frameData?: ArrayBuffer | null;  // WebSocket에서 받은 비디오 프레임 데이터
   onFrameData?: (data: ArrayBuffer) => void;
   width?: number;
   height?: number;
@@ -46,6 +47,7 @@ export function AvatarView({
   isConnected = false,
   isLoading = false,
   videoTrack = null,
+  frameData = null,
   onFrameData,
   width = 512,
   height = 512,
@@ -53,6 +55,7 @@ export function AvatarView({
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [useCanvas, setUseCanvas] = useState(!videoTrack);
+  const canvasInitialized = useRef(false);
 
   // Attach video track to video element
   useEffect(() => {
@@ -92,6 +95,71 @@ export function AvatarView({
       // This is handled by parent component
     }
   }, [onFrameData]);
+
+  // Canvas 초기화 및 배경 그리기 (한 번만 실행)
+  useEffect(() => {
+    if (!useCanvas || !canvasRef.current || canvasInitialized.current) return;
+
+    const ctx = canvasRef.current.getContext('2d');
+    if (!ctx) return;
+
+    // Canvas 전체를 초기 배경색으로 채우기
+    ctx.fillStyle = '#111827'; // gray-900
+    ctx.fillRect(0, 0, width, height);
+    
+    canvasInitialized.current = true;
+    console.debug('Canvas initialized with background');
+  }, [useCanvas, width, height]);
+
+  // 연결 후 프레임이 없을 때 로딩 표시
+  useEffect(() => {
+    if (!useCanvas || !canvasRef.current || !isConnected || frameData) return;
+
+    const ctx = canvasRef.current.getContext('2d');
+    if (!ctx) return;
+
+    // 로딩 배경
+    const gradient = ctx.createLinearGradient(0, 0, width, height);
+    gradient.addColorStop(0, '#1a1a2e');
+    gradient.addColorStop(1, '#16213e');
+    ctx.fillStyle = gradient;
+    ctx.fillRect(0, 0, width, height);
+
+    // 로딩 텍스트
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.5)';
+    ctx.font = '18px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('프레임 대기 중...', width / 2, height / 2);
+  }, [useCanvas, isConnected, frameData, width, height]);
+
+  // frameData prop이 변경되면 canvas에 그리기
+  useEffect(() => {
+    if (!frameData || !canvasRef.current || !useCanvas) return;
+
+    const ctx = canvasRef.current.getContext('2d');
+    if (!ctx) return;
+
+    console.debug('Drawing frame to canvas, size:', frameData.byteLength);
+
+    const blob = new Blob([frameData], { type: 'image/jpeg' });
+    const url = URL.createObjectURL(blob);
+    const img = new Image();
+
+    img.onload = () => {
+      if (canvasRef.current && ctx) {
+        ctx.drawImage(img, 0, 0, width, height);
+        console.debug('Frame drawn successfully');
+      }
+      URL.revokeObjectURL(url);
+    };
+
+    img.onerror = (error) => {
+      console.error('Failed to load frame image:', error);
+      URL.revokeObjectURL(url);
+    };
+
+    img.src = url;
+  }, [frameData, useCanvas, width, height]);
 
   // Draw placeholder when not connected
   useEffect(() => {
@@ -141,6 +209,12 @@ export function AvatarView({
           width={width}
           height={height}
           className="avatar-video"
+          style={{ 
+            backgroundColor: '#111827',
+            display: 'block',
+            width: `${width}px`,
+            height: `${height}px`,
+          }}
         />
       )}
 

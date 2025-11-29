@@ -151,6 +151,7 @@ class AvatarRenderer:
         """MuseTalk 립싱크 모델 초기화"""
         try:
             self._musetalk_model = MuseTalkModel(
+                model_dir="models/musetalk/musetalkV15",
                 device=self.device,
                 fp16=self.use_fp16,
             )
@@ -169,8 +170,8 @@ class AvatarRenderer:
         """LivePortrait 얼굴 애니메이션 모델 초기화"""
         try:
             self._live_portrait_model = LivePortraitModel(
+                model_dir="models/live_portrait",
                 device=self.device,
-                output_size=(self.output_width, self.output_height),
                 fp16=self.use_fp16,
             )
             success = await self._live_portrait_model.initialize()
@@ -274,17 +275,73 @@ class AvatarRenderer:
         return await asyncio.get_event_loop().run_in_executor(None, load_sync)
 
     def _create_default_loops(self) -> None:
-        """기본 단색 프레임으로 idle 루프 생성"""
-        # 기본 회색 프레임
-        default_frame = np.full(
-            (self.output_height, self.output_width, 3),
-            128,
-            dtype=np.uint8,
-        )
+        """소스 이미지에 간단한 애니메이션 효과를 적용한 idle 루프 생성"""
+        import cv2
+        import math
 
-        # 모든 감정에 대해 기본 루프 설정
+        # 루프 설정: 60프레임 = 2초 @ 30fps
+        num_frames = 60
+
+        # 소스 이미지가 있으면 그것을 사용
+        if self._source_image is not None:
+            # 소스 이미지를 출력 크기에 맞게 리사이즈
+            base_frame = cv2.resize(
+                self._source_image,
+                (self.output_width, self.output_height),
+                interpolation=cv2.INTER_LINEAR,
+            )
+            logger.info(f"Creating animated idle loops from source image: {self.output_width}x{self.output_height}")
+        else:
+            # 소스 이미지가 없으면 회색 프레임
+            base_frame = np.full(
+                (self.output_height, self.output_width, 3),
+                128,
+                dtype=np.uint8,
+            )
+            logger.info("Using gray frame for default loops (no source image)")
+
+        # 각 감정별로 다른 애니메이션 효과 적용
         for emotion in [Emotion.NEUTRAL, Emotion.HAPPY, Emotion.SAD, Emotion.LISTENING]:
-            self._idle_loops[emotion] = [default_frame.copy() for _ in range(30)]
+            frames = []
+            
+            for i in range(num_frames):
+                # 프레임 복사
+                frame = base_frame.copy().astype(np.float32)
+                
+                # 1. 호흡 효과 (밝기 미세 변화) - 사인 곡선
+                breath_factor = 1.0 + 0.02 * math.sin(2 * math.pi * i / num_frames)
+                frame = frame * breath_factor
+                
+                # 2. 미세한 움직임 효과 (아주 작은 이동)
+                shift_x = int(1.5 * math.sin(2 * math.pi * i / num_frames))
+                shift_y = int(1.0 * math.sin(4 * math.pi * i / num_frames))
+                
+                # 이동 행렬 생성
+                M = np.float32([[1, 0, shift_x], [0, 1, shift_y]])
+                frame = cv2.warpAffine(
+                    frame.astype(np.uint8), 
+                    M, 
+                    (self.output_width, self.output_height),
+                    borderMode=cv2.BORDER_REFLECT
+                ).astype(np.float32)
+                
+                # 3. 감정별 추가 효과
+                if emotion == Emotion.HAPPY:
+                    # 밝게
+                    frame = frame * 1.05
+                elif emotion == Emotion.SAD:
+                    # 약간 어둡게
+                    frame = frame * 0.95
+                elif emotion == Emotion.LISTENING:
+                    # 약간 파란 톤 추가
+                    frame[:, :, 0] = frame[:, :, 0] * 1.02  # Blue channel
+                
+                # 클리핑하여 0-255 범위로 유지
+                frame = np.clip(frame, 0, 255).astype(np.uint8)
+                frames.append(frame)
+            
+            self._idle_loops[emotion] = frames
+            logger.info(f"Created {num_frames} animated frames for emotion: {emotion.value}")
 
     def _ensure_initialized(self) -> None:
         """초기화 확인"""
@@ -322,15 +379,41 @@ class AvatarRenderer:
         if emotion not in self._idle_loops:
             emotion = Emotion.NEUTRAL
 
-        if emotion not in self._idle_loops:
-            # 모든 루프가 없으면 기본 프레임 생성
+        if emotion not in self._idle_loops or len(self._idle_loops[emotion]) == 0:
+            # 모든 루프가 없으면 기본 프레임 생성 (아바타 이미지 기반)
+            if self._source_image is not None:
+                # 소스 이미지가 있으면 그대로 반환
+                return self._source_image.copy()
+            else:
+                # 소스 이미지도 없으면 회색 배경
+                logger.warning("No idle loops available, using gray frame")
+                frame = np.full(
+                    (self.output_height, self.output_width, 3),
+                    128,
+                    dtype=np.uint8,
+                )
+                # 중앙에 텍스트 추가
+                cv2.putText(
+                    frame,
+                    "Avatar",
+                    (self.output_width // 2 - 50, self.output_height // 2),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    1,
+                    (255, 255, 255),
+                    2,
+                )
+                return frame
+
+        frames = self._idle_loops[emotion]
+        if len(frames) == 0:
+            logger.warning(f"Empty idle loop for emotion: {emotion}")
+            # 빈 프레임 리스트면 기본 프레임 반환
             return np.full(
                 (self.output_height, self.output_width, 3),
                 128,
                 dtype=np.uint8,
             )
-
-        frames = self._idle_loops[emotion]
+        
         frame = frames[self._current_frame_idx % len(frames)]
         self._current_frame_idx += 1
 
@@ -453,7 +536,7 @@ class AvatarRenderer:
         self, frame: np.ndarray, audio_chunk: bytes
     ) -> np.ndarray:
         """
-        MuseTalk으로 립싱크 적용
+        립싱크 적용 (MuseTalk 또는 시뮬레이션)
 
         Args:
             frame: 원본 프레임
@@ -462,26 +545,89 @@ class AvatarRenderer:
         Returns:
             립싱크 적용된 프레임
         """
-        if self._musetalk_model is None:
-            # 모델이 없으면 원본 반환
-            return frame
+        # MuseTalk 모델이 있으면 사용
+        if self._musetalk_model and hasattr(self._musetalk_model, 'process_frame'):
+            try:
+                # bytes를 numpy array로 변환
+                if len(audio_chunk) == 0:
+                    logger.debug("Empty audio chunk, skipping lip sync")
+                    return frame
+                    
+                audio_array = np.frombuffer(audio_chunk, dtype=np.int16).astype(np.float32)
+                audio_array = audio_array / 32767.0  # Normalize to [-1, 1]
 
+                logger.debug(f"Applying MuseTalk lip sync: frame shape={frame.shape}, audio samples={len(audio_array)}")
+
+                # MuseTalk 추론
+                lipsync_frame = await self._musetalk_model.process_frame(
+                    source_frame=frame,
+                    audio_chunk=audio_array,
+                    audio_sample_rate=24000,
+                )
+                
+                if lipsync_frame is not None:
+                    logger.debug(f"MuseTalk lip sync successful: output shape={lipsync_frame.shape}")
+                    return lipsync_frame
+                else:
+                    logger.warning("MuseTalk returned None, using simulation")
+            except Exception as e:
+                logger.error(f"MuseTalk lip sync failed: {e}", exc_info=True)
+
+        # MuseTalk이 없거나 실패하면 간단한 시뮬레이션 사용
+        logger.debug("Using lip sync simulation (MuseTalk not available or failed)")
+        return await self._simulate_lipsync(frame, audio_chunk)
+
+    async def _simulate_lipsync(
+        self, frame: np.ndarray, audio_chunk: bytes
+    ) -> np.ndarray:
+        """
+        간단한 립싱크 시뮬레이션
+        오디오 레벨에 따라 입 모양을 시각적으로 변경
+        """
         try:
-            # bytes를 numpy array로 변환
+            import cv2
+
+            # 오디오 레벨 계산
             audio_array = np.frombuffer(audio_chunk, dtype=np.int16).astype(np.float32)
-            audio_array = audio_array / 32767.0  # Normalize to [-1, 1]
+            audio_level = np.abs(audio_array).mean() / 32767.0  # 0.0 ~ 1.0
 
-            # MuseTalk 추론
-            lipsync_frame = await self._musetalk_model.process_frame(
-                source_frame=frame,
-                audio_chunk=audio_array,
-                audio_sample_rate=24000,  # 기본 샘플레이트
-            )
+            # 입 열림 정도 (0 = 닫힘, 1 = 최대 열림)
+            mouth_openness = min(audio_level * 3.0, 1.0)  # 레벨을 3배 증폭
 
-            return lipsync_frame
+            # 프레임 복사
+            result_frame = frame.copy().astype(np.float32)
+
+            # 입 영역 찾기 (대략적인 위치 - MediaPipe로 더 정확하게 할 수 있음)
+            h, w = frame.shape[:2]
+            mouth_y = int(h * 0.65)  # 입 위치 (얼굴 하단 65%)
+            mouth_x = int(w * 0.5)   # 중심
+            mouth_w = int(w * 0.15)  # 입 너비
+            mouth_h = int(h * 0.08 * mouth_openness)  # 입 높이 (레벨에 따라)
+
+            # 입 열림 시각화 (어둡게)
+            if mouth_openness > 0.1:
+                cv2.ellipse(
+                    result_frame,
+                    (mouth_x, mouth_y),
+                    (mouth_w // 2, mouth_h),
+                    0, 0, 360,
+                    (0, 0, 0),  # 검은색
+                    -1  # 채우기
+                )
+
+            # 입이 열릴 때 주변 밝기 미세 조정 (입 열림 효과)
+            if mouth_openness > 0.3:
+                # 입 주변을 약간 밝게
+                y1 = max(0, mouth_y - mouth_h - 5)
+                y2 = min(h, mouth_y + mouth_h + 5)
+                x1 = max(0, mouth_x - mouth_w)
+                x2 = min(w, mouth_x + mouth_w)
+                result_frame[y1:y2, x1:x2] *= (1.0 + mouth_openness * 0.1)
+
+            return np.clip(result_frame, 0, 255).astype(np.uint8)
 
         except Exception as e:
-            logger.error(f"Lip sync error: {e}")
+            logger.error(f"Lip sync simulation error: {e}")
             return frame
 
     def detect_face_landmarks(self, image: np.ndarray) -> Optional[dict]:

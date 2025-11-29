@@ -57,8 +57,10 @@ export function useWebSocket(options: UseWebSocketOptions): UseWebSocketReturn {
   const handleMessage = useCallback((event: MessageEvent) => {
     // Binary data is video frame
     if (event.data instanceof ArrayBuffer || event.data instanceof Blob) {
+      console.debug('Received video frame, size:', event.data instanceof ArrayBuffer ? event.data.byteLength : 'Blob');
       if (event.data instanceof Blob) {
         event.data.arrayBuffer().then((buffer) => {
+          console.debug('Converted Blob to ArrayBuffer, size:', buffer.byteLength);
           onVideoFrame?.(buffer);
         });
       } else {

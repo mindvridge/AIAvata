@@ -72,6 +72,11 @@ class AvatarWebSocketHandler:
             # 초기 상태 전송
             await self._send_status(websocket, "connected")
 
+            # 백그라운드에서 idle 스트림 자동 시작
+            idle_task = asyncio.create_task(
+                self._start_idle_stream_background(websocket, uuid_session, connection_id)
+            )
+
             # 메시지 수신 루프
             while True:
                 message = await websocket.receive()
@@ -96,6 +101,14 @@ class AvatarWebSocketHandler:
             await self._send_error(websocket, str(e))
 
         finally:
+            # idle 스트림 취소
+            if idle_task and not idle_task.done():
+                idle_task.cancel()
+                try:
+                    await idle_task
+                except asyncio.CancelledError:
+                    pass
+
             # 연결 해제
             if connection_id in self._active_connections:
                 del self._active_connections[connection_id]
@@ -188,6 +201,12 @@ class AvatarWebSocketHandler:
                 # 상태 조회
                 await self._handle_get_status(websocket, session_id)
 
+            elif msg_type == "chat":
+                # 텍스트 채팅 메시지 처리
+                text = message.get("text", "")
+                if text:
+                    await self._handle_chat(websocket, text, session_id)
+
             else:
                 await self._send_error(websocket, f"Unknown message type: {msg_type}")
 
@@ -219,6 +238,59 @@ class AvatarWebSocketHandler:
 
         except ValueError:
             await self._send_error(websocket, f"Invalid emotion: {emotion_str}")
+
+    async def _start_idle_stream_background(
+        self,
+        websocket: WebSocket,
+        session_id: Optional[UUID],
+        connection_id: int,
+    ):
+        """백그라운드에서 idle 스트림 자동 시작 (연결 즉시)"""
+        connection = self._active_connections.get(connection_id)
+        if connection is None:
+            return
+
+        # 이미 스트리밍 중이면 건너뛰기
+        if connection.get("is_streaming"):
+            return
+
+        connection["is_streaming"] = True
+
+        try:
+            logger.info(f"Starting auto idle stream for connection: {connection_id}")
+            await self._send_status(websocket, "idle_streaming")
+
+            frame_count = 0
+            async for frame in self.pipeline.stream_idle(
+                session_id=session_id,
+                duration=-1,  # 무한 스트림 (연결이 끊어질 때까지)
+            ):
+                # 연결이 끊어지면 중지
+                if connection_id not in self._active_connections:
+                    logger.info(f"Connection {connection_id} closed, stopping idle stream")
+                    break
+
+                # 오디오 처리 중이면 idle 프레임 건너뛰기
+                if self._active_connections[connection_id].get("processing_audio"):
+                    continue
+
+                try:
+                    frame_count += 1
+                    if frame_count % 30 == 0:  # 매 30프레임마다 로그
+                        logger.debug(f"Sent {frame_count} idle frames to connection {connection_id}")
+                    
+                    await websocket.send_bytes(frame.data)
+                except Exception as e:
+                    logger.error(f"Error sending idle frame: {e}")
+                    break
+
+        except asyncio.CancelledError:
+            logger.info(f"Idle stream cancelled for connection: {connection_id}")
+        except Exception as e:
+            logger.error(f"Auto idle streaming error: {e}")
+        finally:
+            if connection_id in self._active_connections:
+                self._active_connections[connection_id]["is_streaming"] = False
 
     async def _handle_start_idle(
         self,
@@ -256,6 +328,168 @@ class AvatarWebSocketHandler:
 
         finally:
             if connection_id in self._active_connections:
+                self._active_connections[connection_id]["is_streaming"] = False
+
+    async def _handle_chat(
+        self,
+        websocket: WebSocket,
+        text: str,
+        session_id: Optional[UUID],
+    ):
+        """
+        텍스트 채팅 메시지 처리
+        
+        Args:
+            websocket: WebSocket 연결
+            text: 사용자 입력 텍스트
+            session_id: 세션 ID
+        """
+        connection_id = id(websocket)
+        connection = self._active_connections.get(connection_id)
+
+        if connection is None:
+            return
+
+        logger.info(f"Chat message received: {text[:50]}...")
+
+        try:
+            # 처리 상태 전송
+            await self._send_json(websocket, {
+                "type": "chat_status",
+                "status": "processing",
+                "user_message": text,
+            })
+
+            # 세션에서 시스템 프롬프트 가져오기
+            system_prompt = "당신은 친절하고 공감능력이 뛰어난 AI 어시스턴트입니다. 사용자의 감정에 맞춰 대화해주세요."
+            if session_id:
+                session = self.pipeline.get_session(session_id)
+                if session and hasattr(session, 'system_prompt') and session.system_prompt:
+                    system_prompt = session.system_prompt
+
+            # LLM 응답 생성 (올바른 메서드: generate)
+            response_text = await self.pipeline.llm.generate(
+                user_message=text,
+                system_prompt=system_prompt,
+            )
+
+            logger.info(f"LLM response: {response_text[:50]}...")
+
+            # 응답 텍스트 전송
+            await self._send_json(websocket, {
+                "type": "chat_response",
+                "text": response_text,
+                "user_message": text,
+            })
+
+            # TTS로 음성 생성 및 립싱크 아바타 렌더링
+            try:
+                await self._process_chat_with_tts(websocket, response_text, session_id)
+            except Exception as e:
+                logger.warning(f"TTS/Lipsync processing failed (non-critical): {e}")
+                # TTS 실패해도 텍스트 응답은 이미 전송했으므로 계속 진행
+
+        except Exception as e:
+            logger.error(f"Chat processing error: {e}")
+            await self._send_json(websocket, {
+                "type": "chat_error",
+                "error": str(e),
+                "user_message": text,
+            })
+
+    async def _process_chat_with_tts(
+        self,
+        websocket: WebSocket,
+        response_text: str,
+        session_id: Optional[UUID],
+    ):
+        """
+        TTS로 음성 생성 및 립싱크 비디오 스트리밍
+        
+        Args:
+            websocket: WebSocket 연결
+            response_text: LLM 응답 텍스트
+            session_id: 세션 ID
+        """
+        connection_id = id(websocket)
+        connection = self._active_connections.get(connection_id)
+
+        if connection is None:
+            return
+
+        # 이미 처리 중이면 건너뛰기
+        if connection.get("is_streaming"):
+            return
+
+        connection["is_streaming"] = True
+        connection["processing_audio"] = True
+
+        try:
+            logger.info("Generating TTS audio for chat response...")
+
+            # TTS로 음성 생성 (numpy array 반환)
+            audio_data_np = await self.pipeline.tts.generate(
+                text=response_text,
+                voice_id=None,  # 기본 음성 사용
+            )
+
+            if audio_data_np is not None and len(audio_data_np) > 0:
+                # numpy array를 bytes로 변환 (16-bit PCM)
+                audio_data_bytes = self.pipeline.tts._audio_to_bytes(audio_data_np)
+                logger.info(f"TTS audio generated: {len(audio_data_np)} samples ({len(audio_data_bytes)} bytes)")
+
+                # TTS 오디오를 프론트엔드로 전송 (파동 그래프용)
+                import base64
+                audio_base64 = base64.b64encode(audio_data_bytes).decode('utf-8')
+                await self._send_json(websocket, {
+                    "type": "audio_data",
+                    "data": audio_base64,  # "audio" -> "data"로 변경 (프론트엔드와 일치)
+                    "sample_rate": self.pipeline.tts.sample_rate,
+                })
+
+                # bytes를 AsyncGenerator로 변환
+                async def audio_stream_generator():
+                    # 오디오를 청크로 나누어 전송
+                    chunk_size = 4096  # bytes
+                    offset = 0
+                    while offset < len(audio_data_bytes):
+                        chunk = audio_data_bytes[offset:offset + chunk_size]
+                        yield chunk
+                        offset += chunk_size
+                
+                # 립싱크가 적용된 비디오 프레임 스트림 생성
+                try:
+                    logger.info(f"Starting lip sync rendering: sample_rate={self.pipeline.tts.sample_rate}, audio_bytes={len(audio_data_bytes)}")
+                    frame_count = 0
+                    async for frame in self.pipeline.renderer.render_with_audio(
+                        audio_stream=audio_stream_generator(),
+                        audio_sample_rate=self.pipeline.tts.sample_rate,
+                    ):
+                        # 연결이 끊어지면 중지
+                        if connection_id not in self._active_connections:
+                            logger.warning("Connection closed during lip sync streaming")
+                            break
+
+                        # 비디오 프레임 전송
+                        await websocket.send_bytes(frame.data)
+                        frame_count += 1
+                        
+                        if frame_count % 30 == 0:  # 30프레임마다 로그
+                            logger.debug(f"Sent {frame_count} lip sync frames")
+
+                    logger.info(f"Lipsync video stream completed: {frame_count} frames sent")
+                except Exception as e:
+                    logger.error(f"Error in render_with_audio: {e}", exc_info=True)
+                    # 립싱크 실패해도 연결은 유지
+            else:
+                logger.warning("TTS audio generation returned empty data")
+
+        except Exception as e:
+            logger.error(f"TTS/Lipsync processing error: {e}")
+
+        finally:
+            if connection_id in self._active_connections:
+                self._active_connections[connection_id]["processing_audio"] = False
                 self._active_connections[connection_id]["is_streaming"] = False
 
     async def _handle_get_status(

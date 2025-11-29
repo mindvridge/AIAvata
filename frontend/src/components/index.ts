@@ -1,7 +1,9 @@
 export { AvatarView } from './AvatarView';
 export { AudioRecorder } from './AudioRecorder';
+export { AudioWaveform } from './AudioWaveform';
 export { Controls } from './Controls';
 export { StatusBar } from './StatusBar';
 export { ConversationPanel } from './ConversationPanel';
+export { ChatInput } from './ChatInput';
 export { ErrorLogPanel } from './ErrorLogPanel';
 export type { ErrorLogEntry } from './ErrorLogPanel';

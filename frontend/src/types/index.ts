@@ -85,6 +85,13 @@ export interface EmotionChangedMessage extends WebSocketMessage {
   emotion: Emotion;
 }
 
+export interface AudioDataMessage extends WebSocketMessage {
+  type: 'audio_data';
+  audio: string; // base64 인코딩된 오디오 데이터
+  sample_rate: number;
+  format: string;
+}
+
 // Audio configuration
 export interface AudioConfig {
   sampleRate: number;
@@ -148,6 +155,7 @@ export interface UseAvatarSessionReturn {
   error: string | null;
   createSession: (config?: AvatarConfig) => Promise<void>;
   sendAudio: (data: ArrayBuffer) => void;
+  sendChat: (text: string) => void;
   setEmotion: (emotion: Emotion) => void;
   disconnect: () => void;
 }

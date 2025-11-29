@@ -14,15 +14,22 @@ import type {
 import { api } from '../lib/api';
 import { useWebSocket } from './useWebSocket';
 
+interface ChatResponse {
+  text: string;
+  userMessage: string;
+}
+
 interface UseAvatarSessionOptions {
   onVideoFrame?: (data: ArrayBuffer) => void;
+  onChatResponse?: (response: ChatResponse) => void;
+  onAudioData?: (audioData: ArrayBuffer, sampleRate: number) => void;
   autoConnect?: boolean;
 }
 
 export function useAvatarSession(
   options: UseAvatarSessionOptions = {}
 ): UseAvatarSessionReturn {
-  const { onVideoFrame, autoConnect = false } = options;
+  const { onVideoFrame, onChatResponse, onAudioData, autoConnect = false } = options;
 
   const [session, setSession] = useState<AvatarSession | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -43,6 +50,30 @@ export function useAvatarSession(
     onVideoFrame?.(data);
   }, [onVideoFrame]);
 
+  // WebSocket 메시지 핸들러 (채팅 응답 및 오디오 데이터 처리)
+  const handleMessage = useCallback((message: any) => {
+    if (message.type === 'chat_response') {
+      onChatResponse?.({
+        text: message.text,
+        userMessage: message.user_message,
+      });
+    } else if (message.type === 'audio_data' && (message.data || message.audio)) {
+      // base64로 인코딩된 오디오 데이터 디코딩
+      try {
+        const audioBase64 = message.data || message.audio; // "data" 또는 "audio" 필드 지원
+        const binaryString = atob(audioBase64);
+        const audioArrayBuffer = new ArrayBuffer(binaryString.length);
+        const audioView = new Uint8Array(audioArrayBuffer);
+        for (let i = 0; i < binaryString.length; i++) {
+          audioView[i] = binaryString.charCodeAt(i);
+        }
+        onAudioData?.(audioArrayBuffer, message.sample_rate || 24000);
+      } catch (error) {
+        console.error('오디오 데이터 디코딩 실패:', error);
+      }
+    }
+  }, [onChatResponse, onAudioData]);
+
   const {
     isConnected,
     connectionState,
@@ -55,6 +86,7 @@ export function useAvatarSession(
   } = useWebSocket({
     url: wsUrl || getWsUrl(), // 초기 URL 설정 (세션 생성 후 업데이트됨)
     onVideoFrame: handleVideoFrame,
+    onMessage: handleMessage,
     autoReconnect: true,
   });
 
@@ -115,6 +147,16 @@ export function useAvatarSession(
     } as { type: string; emotion: Emotion });
   }, [sendMessage]);
 
+  // 텍스트 채팅 메시지 전송
+  const sendChat = useCallback((text: string) => {
+    if (!text.trim()) return;
+    
+    sendMessage({
+      type: 'chat',
+      text: text.trim(),
+    } as { type: string; text: string });
+  }, [sendMessage]);
+
   const disconnect = useCallback(() => {
     wsDisconnect();
 
@@ -137,6 +179,7 @@ export function useAvatarSession(
     error,
     createSession,
     sendAudio,
+    sendChat,
     setEmotion,
     disconnect,
   };

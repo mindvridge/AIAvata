@@ -56,6 +56,9 @@ class Settings(BaseSettings):
     avatars_dir: str = Field(
         default="assets/avatars", description="Directory for avatar images"
     )
+    default_avatar_image: str = Field(
+        default="assets/avatars/avata.png", description="Default avatar image path"
+    )
 
     # Avatar Settings
     system_prompt: str = Field(

@@ -8,9 +8,11 @@ import React, { useState, useCallback, useRef, useEffect } from 'react';
 import {
   AvatarView,
   AudioRecorder,
+  AudioWaveform,
   Controls,
   StatusBar,
   ConversationPanel,
+  ChatInput,
   ErrorLogPanel,
 } from './components';
 import { useAvatarSession, useErrorLogger } from './hooks';
@@ -26,24 +28,7 @@ interface Message {
 }
 
 function App() {
-  // Session state
-  const {
-    session,
-    pipelineState,
-    emotion,
-    isConnected,
-    connectionState,
-    error,
-    createSession,
-    sendAudio,
-    setEmotion,
-    disconnect,
-  } = useAvatarSession({
-    onVideoFrame: handleVideoFrame,
-    autoConnect: false,
-  });
-
-  // Local state
+  // Local state (useAvatarSession보다 먼저 정의)
   const [messages, setMessages] = useState<Message[]>([]);
   const [currentTranscript, setCurrentTranscript] = useState('');
   const [isRecording, setIsRecording] = useState(false);
@@ -51,6 +36,10 @@ function App() {
   const [showConversation, setShowConversation] = useState(true);
   const [showErrorLog, setShowErrorLog] = useState(false);
   const [isConnecting, setIsConnecting] = useState(false);
+  const [frameData, setFrameData] = useState<ArrayBuffer | null>(null);
+  const [isChatLoading, setIsChatLoading] = useState(false);
+  const [audioData, setAudioData] = useState<ArrayBuffer | null>(null);
+  const [audioLevel, setAudioLevel] = useState(0);
 
   // Error logger
   const {
@@ -63,27 +52,62 @@ function App() {
     warningCount,
   } = useErrorLogger();
 
-  // Refs
-  const canvasRef = useRef<HTMLCanvasElement>(null);
+  // Handle video frames from WebSocket - AvatarView에 전달
+  const handleVideoFrame = useCallback((data: ArrayBuffer) => {
+    console.debug('App: Received video frame, size:', data.byteLength);
+    setFrameData(data);
+  }, []);
 
-  // Handle video frames from WebSocket
-  function handleVideoFrame(data: ArrayBuffer) {
-    if (!canvasRef.current) return;
+  // Handle audio data from server - AudioWaveform에 전달
+  const handleAudioDataFromServer = useCallback((data: ArrayBuffer, sampleRate: number) => {
+    setAudioData(data);
+    
+    // 오디오 레벨 계산 (간단한 방식)
+    try {
+      const audioView = new Int16Array(data);
+      let sum = 0;
+      for (let i = 0; i < audioView.length; i++) {
+        sum += Math.abs(audioView[i]);
+      }
+      const average = sum / audioView.length;
+      const level = Math.min(average / 32767, 1.0); // 0-1 범위로 정규화
+      setAudioLevel(level);
+    } catch (error) {
+      console.error('오디오 레벨 계산 실패:', error);
+    }
+  }, []);
 
-    const ctx = canvasRef.current.getContext('2d');
-    if (!ctx) return;
-
-    const blob = new Blob([data], { type: 'image/jpeg' });
-    const url = URL.createObjectURL(blob);
-    const img = new Image();
-
-    img.onload = () => {
-      ctx.drawImage(img, 0, 0, canvasRef.current!.width, canvasRef.current!.height);
-      URL.revokeObjectURL(url);
+  // Handle chat response from WebSocket
+  const handleChatResponse = useCallback((response: { text: string; userMessage: string }) => {
+    const assistantMessage: Message = {
+      id: `assistant-${Date.now()}`,
+      role: 'assistant',
+      content: response.text,
+      timestamp: new Date(),
     };
+    setMessages(prev => [...prev, assistantMessage]);
+    setIsChatLoading(false);
+  }, []); // setMessages와 setIsChatLoading은 setState 함수이므로 의존성 배열에 필요 없음
 
-    img.src = url;
-  }
+  // Session state (함수들이 모두 정의된 후에 호출)
+  const {
+    session,
+    pipelineState,
+    emotion,
+    isConnected,
+    connectionState,
+    error,
+    createSession,
+    sendAudio,
+    sendChat,
+    setEmotion,
+    disconnect,
+  } = useAvatarSession({
+    onVideoFrame: handleVideoFrame,
+    onChatResponse: handleChatResponse,
+    onAudioData: handleAudioDataFromServer,
+    autoConnect: false,
+  });
 
   // Handle audio data from recorder
   const handleAudioData = useCallback((data: ArrayBuffer) => {
@@ -143,6 +167,26 @@ function App() {
   const handleEmotionChange = useCallback((newEmotion: Emotion) => {
     setEmotion(newEmotion);
   }, [setEmotion]);
+
+  // Chat message handler
+  const handleChatSend = useCallback((text: string) => {
+    if (!isConnected || !text.trim()) return;
+
+    // 사용자 메시지 추가
+    const userMessage: Message = {
+      id: `user-${Date.now()}`,
+      role: 'user',
+      content: text,
+      timestamp: new Date(),
+    };
+    setMessages(prev => [...prev, userMessage]);
+    setIsChatLoading(true);
+
+    // WebSocket으로 채팅 메시지 전송
+    sendChat(text);
+    
+    // 응답은 WebSocket onChatResponse callback에서 처리됨
+  }, [isConnected, sendChat]);
 
   // Add message to history
   const addMessage = useCallback((role: 'user' | 'assistant', content: string, emotionStr?: string) => {
@@ -215,16 +259,23 @@ function App() {
                 pipelineState={pipelineState}
                 isConnected={isConnected}
                 isLoading={connectionState === 'connecting' || isConnecting}
+                frameData={frameData}
                 width={512}
                 height={512}
               />
+            </div>
 
-              {/* Hidden canvas for WebSocket frames */}
-              <canvas
-                ref={canvasRef}
+            {/* Audio waveform - 아바타 음성 파동 그래프 */}
+            <div className="w-full max-w-lg">
+              <AudioWaveform
+                audioData={audioData}
+                audioLevel={audioLevel}
                 width={512}
-                height={512}
-                className="hidden"
+                height={80}
+                barColor="#3b82f6"
+                backgroundColor="#1f2937"
+                showLevel={true}
+                isActive={pipelineState === 'speaking' || pipelineState === 'processing'}
               />
             </div>
 
@@ -235,6 +286,16 @@ function App() {
                 isEnabled={isConnected && !isMuted}
                 size="lg"
                 showLevel={true}
+              />
+            </div>
+
+            {/* Chat input */}
+            <div className="w-full max-w-lg mt-4">
+              <ChatInput
+                onSend={handleChatSend}
+                isLoading={isChatLoading}
+                isDisabled={!isConnected}
+                placeholder="메시지를 입력하세요... (Enter로 전송)"
               />
             </div>
 
