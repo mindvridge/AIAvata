@@ -142,6 +142,10 @@ Desktop.ini
 *.bin
 *.safetensors
 
+# External repositories (clone separately)
+external/MuseTalk/
+external/LivePortrait/
+
 # Generated files
 assets/idle_loops/*.mp4
 assets/voice_samples/*.wav
