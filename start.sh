@@ -1,16 +1,9 @@
 #!/bin/bash
 #
-# AI Avatar 통합 실행 스크립트
-# 설치, 환경 체크, 서버 실행을 하나로 통합
+# AI Avatar 자동 실행 스크립트
+# 실행만 하면 설치 → 체크 → 서버 실행까지 자동 진행
 #
-# Usage: ./start.sh [명령]
-#
-# 명령:
-#   install     의존성 설치
-#   check       환경 체크
-#   run         서버 실행 (기본값)
-#   all         설치 + 실행
-#   help        도움말
+# Usage: ./start.sh
 #
 
 set -e
@@ -28,10 +21,11 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
 # ============================================================
-#                        로고 및 UI
+#                        로고
 # ============================================================
 
 print_logo() {
+    clear
     echo -e "${CYAN}"
     echo "╔═══════════════════════════════════════════════════════════╗"
     echo "║                                                           ║"
@@ -48,175 +42,106 @@ print_logo() {
     echo -e "${NC}"
 }
 
-print_section() {
+print_step() {
     echo ""
     echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-    echo -e "${BLUE}  $1${NC}"
+    echo -e "${BLUE}  STEP $1: $2${NC}"
     echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
     echo ""
 }
 
-show_help() {
-    echo "Usage: ./start.sh [명령]"
-    echo ""
-    echo "명령:"
-    echo "  install     의존성 및 모델 설치"
-    echo "  check       환경 체크"
-    echo "  run         서버 실행 (기본값)"
-    echo "  all         설치 후 실행"
-    echo "  frontend    프론트엔드만 실행"
-    echo "  help        도움말"
-    echo ""
-    echo "예시:"
-    echo "  ./start.sh              # 서버 실행"
-    echo "  ./start.sh install      # 의존성 설치"
-    echo "  ./start.sh all          # 설치 + 실행"
-    echo ""
-}
-
 # ============================================================
-#                        환경 체크
-# ============================================================
-
-check_environment() {
-    print_section "환경 체크"
-
-    local all_ok=true
-
-    # Python
-    echo -e "${YELLOW}[Python]${NC}"
-    if command -v python3 &> /dev/null; then
-        echo -e "  ✅ $(python3 --version)"
-    else
-        echo -e "  ❌ Python3 설치 필요"
-        all_ok=false
-    fi
-    echo ""
-
-    # 핵심 모듈
-    echo -e "${YELLOW}[핵심 모듈]${NC}"
-    python3 << 'PYCHECK'
-modules = [
-    ("funasr", "STT (SenseVoice)"),
-    ("chatterbox", "TTS (Chatterbox)"),
-    ("openai", "LLM (OpenAI)"),
-    ("anthropic", "LLM (Claude)"),
-    ("livekit", "LiveKit"),
-    ("torch", "PyTorch"),
-    ("diffusers", "Diffusers"),
-]
-for mod, name in modules:
-    try:
-        __import__(mod)
-        print(f"  ✅ {name}")
-    except ImportError:
-        print(f"  ❌ {name}")
-PYCHECK
-    echo ""
-
-    # 모델 파일
-    echo -e "${YELLOW}[모델 파일]${NC}"
-    if [ -f "models/musetalk/musetalkV15/unet.pth" ]; then
-        echo -e "  ✅ MuseTalk UNet"
-    else
-        echo -e "  ❌ MuseTalk UNet"
-        all_ok=false
-    fi
-
-    if [ -f "models/musetalk/sd-vae-ft-mse/config.json" ]; then
-        echo -e "  ✅ MuseTalk VAE"
-    else
-        echo -e "  ❌ MuseTalk VAE"
-        all_ok=false
-    fi
-    echo ""
-
-    # .env 파일
-    echo -e "${YELLOW}[환경 설정]${NC}"
-    if [ -f ".env" ]; then
-        if grep -q "your_openai_api_key_here\|your_anthropic_api_key_here" .env 2>/dev/null; then
-            echo -e "  ⚠️  .env - API 키 설정 필요"
-        else
-            echo -e "  ✅ .env 설정됨"
-        fi
-    else
-        echo -e "  ❌ .env 파일 없음"
-        all_ok=false
-    fi
-    echo ""
-
-    if [ "$all_ok" = true ]; then
-        echo -e "${GREEN}✅ 모든 체크 통과${NC}"
-        return 0
-    else
-        echo -e "${YELLOW}⚠️  일부 항목 확인 필요${NC}"
-        return 1
-    fi
-}
-
-# ============================================================
-#                        설치
+#                   STEP 1: 의존성 설치
 # ============================================================
 
 install_dependencies() {
-    print_section "의존성 설치"
+    print_step "1/4" "의존성 설치"
+
+    # 이미 설치 확인
+    if python3 -c "import torch, funasr, openai, livekit" 2>/dev/null; then
+        echo -e "${GREEN}✅ 핵심 패키지 이미 설치됨 - 스킵${NC}"
+        return 0
+    fi
+
+    echo "패키지 설치 중..."
 
     # GPU 체크
-    if python3 -c "import torch; print(torch.cuda.is_available())" 2>/dev/null | grep -q "True"; then
-        DEVICE="gpu"
-        echo -e "${GREEN}GPU(CUDA) 감지됨${NC}"
+    if python3 -c "import torch; exit(0 if torch.cuda.is_available() else 1)" 2>/dev/null; then
+        TORCH_URL="https://download.pytorch.org/whl/cu118"
+        echo -e "${GREEN}GPU(CUDA) 감지${NC}"
     else
-        DEVICE="cpu"
-        echo -e "${YELLOW}CPU 모드로 설치${NC}"
+        TORCH_URL="https://download.pytorch.org/whl/cpu"
+        echo -e "${YELLOW}CPU 모드${NC}"
     fi
-    echo ""
 
-    # 1. PyTorch
-    echo -e "${YELLOW}[1/5] PyTorch 설치${NC}"
-    if [ "$DEVICE" == "gpu" ]; then
-        pip install torch torchaudio torchvision --index-url https://download.pytorch.org/whl/cu118 -q
-    else
-        pip install torch torchaudio torchvision --index-url https://download.pytorch.org/whl/cpu -q
+    # PyTorch
+    echo "  → PyTorch 설치..."
+    pip install torch torchaudio torchvision --index-url $TORCH_URL -q 2>/dev/null || pip install torch torchaudio torchvision -q
+
+    # 기본 패키지
+    echo "  → 기본 패키지 설치..."
+    pip install fastapi uvicorn python-dotenv websockets aiofiles pydantic numpy -q 2>/dev/null || true
+    pip install opencv-python-headless mediapipe -q 2>/dev/null || true
+
+    # LLM
+    echo "  → LLM SDK 설치..."
+    pip install openai anthropic -q 2>/dev/null || true
+
+    # LiveKit
+    echo "  → LiveKit 설치..."
+    pip install livekit livekit-api -q 2>/dev/null || true
+
+    # ML 패키지
+    echo "  → ML 패키지 설치..."
+    pip install transformers diffusers accelerate huggingface_hub -q 2>/dev/null || true
+
+    # STT (FunASR)
+    echo "  → STT 모듈 설치..."
+    pip install funasr modelscope -q 2>/dev/null || true
+    pip install omegaconf kaldiio hydra-core torch-complex --no-deps -q 2>/dev/null || true
+
+    # TTS (Chatterbox)
+    echo "  → TTS 모듈 설치..."
+    pip install edge-tts gtts -q 2>/dev/null || true
+    pip install chatterbox-tts resemble-perth conformer --no-deps -q 2>/dev/null || true
+
+    echo -e "${GREEN}✅ 의존성 설치 완료${NC}"
+}
+
+# ============================================================
+#                   STEP 2: 모델 다운로드
+# ============================================================
+
+download_models() {
+    print_step "2/4" "모델 다운로드"
+
+    # 모델 체크
+    if [ -f "models/musetalk/musetalkV15/unet.pth" ] && [ -f "models/musetalk/sd-vae-ft-mse/config.json" ]; then
+        echo -e "${GREEN}✅ 모델 파일 이미 존재 - 스킵${NC}"
+        return 0
     fi
-    echo -e "  ✅ PyTorch 설치 완료"
 
-    # 2. 기본 패키지
-    echo -e "${YELLOW}[2/5] 기본 패키지 설치${NC}"
-    pip install fastapi uvicorn python-dotenv websockets aiofiles pydantic numpy opencv-python-headless -q
-    pip install openai anthropic livekit livekit-api -q
-    pip install transformers diffusers accelerate huggingface_hub -q
-    echo -e "  ✅ 기본 패키지 설치 완료"
+    echo "모델 다운로드 중..."
 
-    # 3. STT (FunASR)
-    echo -e "${YELLOW}[3/5] STT 모듈 설치${NC}"
-    pip install funasr modelscope omegaconf kaldiio hydra-core torch-complex -q --no-deps 2>/dev/null || true
-    pip install funasr -q 2>/dev/null || echo "  ⚠️ FunASR 일부 의존성 스킵"
-    echo -e "  ✅ STT 설치 완료"
-
-    # 4. TTS (Chatterbox)
-    echo -e "${YELLOW}[4/5] TTS 모듈 설치${NC}"
-    pip install edge-tts gtts -q
-    pip install chatterbox-tts resemble-perth conformer s3tokenizer -q --no-deps 2>/dev/null || true
-    echo -e "  ✅ TTS 설치 완료"
-
-    # 5. 모델 다운로드
-    echo -e "${YELLOW}[5/5] 모델 다운로드${NC}"
     python3 << 'PYMODELS'
 import os
 from pathlib import Path
 
 try:
-    from huggingface_hub import snapshot_download, hf_hub_download
+    from huggingface_hub import snapshot_download
 
-    # VAE 모델
+    # 디렉토리 생성
+    Path("models/musetalk/musetalkV15").mkdir(parents=True, exist_ok=True)
+
+    # VAE 다운로드
     vae_dir = Path("models/musetalk/sd-vae-ft-mse")
     if not (vae_dir / "config.json").exists():
-        print("  VAE 다운로드 중...")
+        print("  → VAE 모델 다운로드...")
         snapshot_download(
             repo_id="stabilityai/sd-vae-ft-mse",
             local_dir=str(vae_dir),
         )
-        print("  ✅ VAE 다운로드 완료")
+        print("  ✅ VAE 완료")
     else:
         print("  ✅ VAE 이미 존재")
 
@@ -225,100 +150,106 @@ try:
     if unet_path.exists():
         print("  ✅ UNet 이미 존재")
     else:
-        print("  ⚠️ UNet 모델 수동 다운로드 필요")
+        print("  ⚠️  UNet 모델은 수동 다운로드 필요")
+        print("      → https://huggingface.co/TMElyralab/MuseTalk")
 
 except Exception as e:
-    print(f"  ⚠️ 모델 다운로드 오류: {e}")
+    print(f"  ⚠️ 모델 다운로드 중 오류: {e}")
 PYMODELS
 
-    # .env 파일 생성
-    if [ ! -f ".env" ]; then
-        cp .env.example .env
-        echo -e "  ✅ .env 파일 생성됨"
-        echo -e "  ${YELLOW}⚠️  .env 파일에 API 키를 설정하세요${NC}"
-    fi
+    echo -e "${GREEN}✅ 모델 다운로드 완료${NC}"
+}
+
+# ============================================================
+#                   STEP 3: 환경 설정
+# ============================================================
+
+setup_environment() {
+    print_step "3/4" "환경 설정"
 
     # 디렉토리 생성
     mkdir -p assets/idle_loops models/musetalk logs
 
+    # .env 파일 생성
+    if [ ! -f ".env" ]; then
+        if [ -f ".env.example" ]; then
+            cp .env.example .env
+            echo -e "${YELLOW}⚠️  .env 파일 생성됨${NC}"
+            echo -e "${YELLOW}   API 키를 설정해주세요:${NC}"
+            echo "   - OPENAI_API_KEY 또는 ANTHROPIC_API_KEY"
+        fi
+    else
+        echo -e "${GREEN}✅ .env 파일 존재${NC}"
+    fi
+
+    # 환경 체크
     echo ""
-    echo -e "${GREEN}✅ 설치 완료!${NC}"
+    echo -e "${YELLOW}[모듈 상태]${NC}"
+    python3 << 'PYCHECK'
+modules = [
+    ("funasr", "STT"),
+    ("chatterbox", "TTS"),
+    ("openai", "OpenAI"),
+    ("anthropic", "Claude"),
+    ("livekit", "LiveKit"),
+    ("torch", "PyTorch"),
+]
+for mod, name in modules:
+    try:
+        __import__(mod)
+        print(f"  ✅ {name}")
+    except:
+        print(f"  ❌ {name}")
+PYCHECK
+
+    echo ""
+    echo -e "${YELLOW}[모델 상태]${NC}"
+    [ -f "models/musetalk/musetalkV15/unet.pth" ] && echo "  ✅ MuseTalk UNet" || echo "  ❌ MuseTalk UNet"
+    [ -f "models/musetalk/sd-vae-ft-mse/config.json" ] && echo "  ✅ MuseTalk VAE" || echo "  ❌ MuseTalk VAE"
+
+    echo ""
+    echo -e "${GREEN}✅ 환경 설정 완료${NC}"
 }
 
 # ============================================================
-#                        서버 실행
+#                   STEP 4: 서버 실행
 # ============================================================
 
 run_server() {
-    print_section "서버 실행"
+    print_step "4/4" "서버 실행"
 
     # .env 로드
     if [ -f ".env" ]; then
-        export $(grep -v '^#' .env | xargs 2>/dev/null) || true
+        set -a
+        source .env 2>/dev/null || true
+        set +a
     fi
 
     HOST=${HOST:-0.0.0.0}
     PORT=${PORT:-8000}
 
-    echo -e "  Host: ${CYAN}$HOST${NC}"
-    echo -e "  Port: ${CYAN}$PORT${NC}"
-    echo -e "  URL:  ${CYAN}http://$HOST:$PORT${NC}"
+    echo -e "  서버 주소: ${CYAN}http://$HOST:$PORT${NC}"
+    echo -e "  API 문서:  ${CYAN}http://$HOST:$PORT/docs${NC}"
     echo ""
-    echo -e "${GREEN}서버 시작 중...${NC}"
-    echo -e "${YELLOW}종료하려면 Ctrl+C${NC}"
+    echo -e "${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo -e "${GREEN}  서버 시작! 종료하려면 Ctrl+C${NC}"
+    echo -e "${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
     echo ""
 
     uvicorn src.main:app --host $HOST --port $PORT --reload
 }
 
-run_frontend() {
-    print_section "프론트엔드 실행"
-
-    cd frontend
-
-    if [ ! -d "node_modules" ]; then
-        echo "npm install 실행 중..."
-        npm install
-    fi
-
-    echo -e "${GREEN}프론트엔드 시작 중...${NC}"
-    npm run dev
-}
-
 # ============================================================
-#                        메인
+#                        메인 실행
 # ============================================================
-
-COMMAND=${1:-run}
 
 print_logo
 
-case $COMMAND in
-    install)
-        install_dependencies
-        ;;
-    check)
-        check_environment
-        ;;
-    run)
-        check_environment && run_server
-        ;;
-    all)
-        install_dependencies
-        echo ""
-        check_environment
-        echo ""
-        run_server
-        ;;
-    frontend)
-        run_frontend
-        ;;
-    help|--help|-h)
-        show_help
-        ;;
-    *)
-        echo -e "${RED}알 수 없는 명령: $COMMAND${NC}"
-        show_help
-        exit 1
-        ;;
-esac
+echo -e "${GREEN}AI Avatar 서비스를 시작합니다...${NC}"
+echo ""
+
+# 순차 실행
+install_dependencies
+download_models
+setup_environment
+run_server
