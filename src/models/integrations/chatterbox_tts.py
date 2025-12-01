@@ -16,7 +16,7 @@ import asyncio
 import logging
 import os
 from pathlib import Path
-from typing import Optional, AsyncGenerator, Union, List
+from typing import Optional, AsyncGenerator, List
 
 import numpy as np
 
