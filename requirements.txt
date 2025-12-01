@@ -22,13 +22,18 @@ funasr>=1.0.0
 modelscope>=1.9.0
 
 # TTS (Chatterbox)
-chatterbox-tts>=0.1.0
+# chatterbox-tts는 PyPI에 없음. GitHub에서 직접 설치 필요:
+# pip install git+https://github.com/resemble-ai/chatterbox.git
+# 또는 edge-tts를 대안으로 사용
+edge-tts>=6.1.0
 
 # Face Detection (InsightFace 대체 - 상업적 라이선스)
 mediapipe>=0.10.0
 
-# VAD
-silero-vad>=4.0.0
+# VAD (Silero VAD - PyPI 패키지가 아닌 torch hub에서 로드)
+# torch.hub.load('snakers4/silero-vad', 'silero_vad')
+# 직접 설치가 필요한 경우: pip install -U silero
+# silero는 별도 패키지가 없으며 torch에 의존
 
 # WebRTC
 livekit>=0.10.0

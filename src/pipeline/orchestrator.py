@@ -224,18 +224,15 @@ class PipelineOrchestrator:
             # 4. LLM 스트리밍 → TTS → Avatar 렌더링 파이프라인
             session.pipeline_state = PipelineState.PROCESSING
 
-            # LLM 응답 수집 (대화 히스토리용)
-            full_response = ""
-
             async for video_frame in self._process_llm_tts_render(
                 user_text=stt_result.text,
                 user_emotion=stt_result.emotion.value,
                 conversation_history=session.conversation_history[:-1],  # 현재 메시지 제외
+                session=session,  # 세션 전달하여 응답 히스토리 저장
             ):
                 yield video_frame
 
-            # 5. 대화 히스토리에 어시스턴트 응답 추가
-            # Note: 실제 응답 텍스트는 스트리밍 중 수집해야 함
+            # 5. 파이프라인 완료 (응답은 _process_llm_tts_render에서 저장됨)
             session.pipeline_state = PipelineState.IDLE
 
             # 성능 메트릭 업데이트
@@ -269,13 +266,23 @@ class PipelineOrchestrator:
         user_text: str,
         user_emotion: str,
         conversation_history: List[dict],
+        session: Optional[AvatarSession] = None,
     ) -> AsyncGenerator[VideoFrame, None]:
         """
         LLM → TTS → Avatar 렌더링 파이프라인
 
         LLM 스트리밍 출력을 TTS로 변환하고,
         오디오에 맞춰 립싱크된 비디오 프레임을 생성합니다.
+
+        Args:
+            user_text: 사용자 입력 텍스트
+            user_emotion: 사용자 감정
+            conversation_history: 이전 대화 내역
+            session: 아바타 세션 (응답 저장용)
         """
+        # LLM 응답 텍스트 수집용 버퍼
+        collected_response_text: List[str] = []
+
         # LLM 스트리밍 응답 생성
         llm_stream = self.llm.generate_stream(
             user_message=user_text,
@@ -284,10 +291,11 @@ class PipelineOrchestrator:
             user_emotion=user_emotion,
         )
 
-        # LLM 텍스트 → TTS 텍스트 스트림으로 변환
+        # LLM 텍스트 → TTS 텍스트 스트림으로 변환 (응답 수집 포함)
         async def text_stream():
             async for response in llm_stream:
                 if response.text:
+                    collected_response_text.append(response.text)
                     yield response.text
 
         # TTS 스트리밍
@@ -307,6 +315,15 @@ class PipelineOrchestrator:
             audio_sample_rate=self.settings.tts_sample_rate,
         ):
             yield frame
+
+        # 스트리밍 완료 후 대화 히스토리에 어시스턴트 응답 저장
+        if session is not None and collected_response_text:
+            full_response = "".join(collected_response_text)
+            session.conversation_history.append({
+                "role": "assistant",
+                "content": full_response,
+            })
+            logger.debug(f"Saved assistant response to history: {full_response[:50]}...")
 
     async def stream_idle(
         self,

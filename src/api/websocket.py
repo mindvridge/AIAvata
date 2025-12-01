@@ -357,7 +357,7 @@ class AvatarWebSocketHandler:
     ):
         """
         텍스트 채팅 메시지 처리
-        
+
         Args:
             websocket: WebSocket 연결
             text: 사용자 입력 텍스트
@@ -371,6 +371,11 @@ class AvatarWebSocketHandler:
 
         logger.info(f"Chat message received: {text[:50]}...")
 
+        # 세션 가져오기
+        session = None
+        if session_id:
+            session = self.pipeline.get_session(session_id)
+
         try:
             # 처리 상태 전송
             await self._send_json(websocket, {
@@ -379,20 +384,37 @@ class AvatarWebSocketHandler:
                 "user_message": text,
             })
 
+            # 대화 히스토리에 사용자 메시지 추가
+            if session:
+                session.conversation_history.append({
+                    "role": "user",
+                    "content": text,
+                })
+                logger.debug(f"Added user message to history: {text[:50]}...")
+
             # 세션에서 시스템 프롬프트 가져오기
-            system_prompt = "당신은 친절하고 공감능력이 뛰어난 AI 어시스턴트입니다. 사용자의 감정에 맞춰 대화해주세요."
-            if session_id:
-                session = self.pipeline.get_session(session_id)
-                if session and hasattr(session, 'system_prompt') and session.system_prompt:
-                    system_prompt = session.system_prompt
+            system_prompt = self.pipeline.settings.system_prompt if hasattr(self.pipeline, 'settings') else \
+                "당신은 친절하고 공감능력이 뛰어난 AI 어시스턴트입니다. 사용자의 감정에 맞춰 대화해주세요."
+
+            # 대화 히스토리 전달 (현재 메시지 제외)
+            conversation_history = session.conversation_history[:-1] if session else []
 
             # LLM 응답 생성 (올바른 메서드: generate)
             response_text = await self.pipeline.llm.generate(
                 user_message=text,
                 system_prompt=system_prompt,
+                conversation_history=conversation_history,
             )
 
             logger.info(f"LLM response: {response_text[:50]}...")
+
+            # 대화 히스토리에 어시스턴트 응답 추가
+            if session:
+                session.conversation_history.append({
+                    "role": "assistant",
+                    "content": response_text,
+                })
+                logger.debug(f"Added assistant response to history: {response_text[:50]}...")
 
             # 응답 텍스트 전송
             await self._send_json(websocket, {
