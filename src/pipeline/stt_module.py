@@ -1,5 +1,5 @@
 """
-STT Module using SenseVoice-Small.
+STT Module using SenseVoice-Small or Whisper fallback.
 
 SenseVoice-Small 기반 음성 인식 + 감정 인식 모듈
 특징:
@@ -7,6 +7,9 @@ SenseVoice-Small 기반 음성 인식 + 감정 인식 모듈
 - 감정인식 내장 (happy, sad, angry, neutral)
 - Whisper 대비 5배 빠른 추론
 - Apache 2.0 라이선스 (상업적 사용 가능)
+
+Fallback:
+- FunASR 미설치 시 Whisper (transformers) 사용
 """
 
 import asyncio
@@ -20,6 +23,9 @@ from ..models.emotion import Emotion, EmotionMapping
 from ..models.schemas import STTResult
 
 logger = logging.getLogger(__name__)
+
+# Whisper fallback 모델 타입
+WHISPER_MODEL_ID = "openai/whisper-tiny"
 
 
 class STTModule:
@@ -54,6 +60,8 @@ class STTModule:
         self.max_segment_time = max_segment_time
         self.model_path = model_path
         self.model = None
+        self._whisper_pipeline = None  # Whisper fallback
+        self._use_whisper = False  # Whisper 사용 여부
         self._initialized = False
 
     async def initialize(self) -> None:
@@ -110,16 +118,52 @@ class STTModule:
 
         except ImportError:
             logger.warning(
-                "FunASR not installed. STT will return mock results. "
-                "Install with: pip install funasr"
+                "FunASR not installed. Trying Whisper fallback..."
             )
-            self._initialized = True  # Allow operation with mock results
+            # Whisper fallback 시도
+            if await self._init_whisper_fallback():
+                logger.info("Whisper fallback initialized successfully")
+            else:
+                logger.warning("STT will return mock results. Install funasr or transformers.")
+            self._initialized = True
 
         except Exception as e:
             logger.error(f"Failed to initialize SenseVoice model: {e}")
-            # STT 모델 초기화 실패 시에도 서비스는 계속 실행 (mock 모드)
-            logger.warning("STT will operate in mock mode. Speech recognition will return placeholder text.")
-            self._initialized = True  # Allow operation with mock results
+            # Whisper fallback 시도
+            if await self._init_whisper_fallback():
+                logger.info("Whisper fallback initialized successfully")
+            else:
+                logger.warning("STT will operate in mock mode.")
+            self._initialized = True
+
+    async def _init_whisper_fallback(self) -> bool:
+        """Whisper fallback 초기화"""
+        try:
+            from transformers import pipeline
+            import torch
+
+            device_str = "cpu"
+            if self.device == "cuda" and torch.cuda.is_available():
+                device_str = "cuda:0"
+            elif self.device == "mps" and torch.backends.mps.is_available():
+                device_str = "mps"
+
+            logger.info(f"Loading Whisper model ({WHISPER_MODEL_ID}) on {device_str}...")
+            self._whisper_pipeline = pipeline(
+                "automatic-speech-recognition",
+                model=WHISPER_MODEL_ID,
+                device=device_str,
+            )
+            self._use_whisper = True
+            logger.info("Whisper model loaded successfully")
+            return True
+
+        except ImportError:
+            logger.warning("transformers not installed for Whisper fallback")
+            return False
+        except Exception as e:
+            logger.error(f"Failed to initialize Whisper fallback: {e}")
+            return False
 
     def _ensure_initialized(self) -> None:
         """모델이 초기화되었는지 확인"""
@@ -148,6 +192,10 @@ class STTModule:
 
         # 오디오 전처리
         audio = self._preprocess_audio(audio, sample_rate)
+
+        # Whisper fallback 사용
+        if self._use_whisper and self._whisper_pipeline is not None:
+            return await self._transcribe_whisper(audio, sample_rate, language, start_time)
 
         if self.model is None:
             # Mock result for testing without model
@@ -207,6 +255,50 @@ class STTModule:
 
         except Exception as e:
             logger.error(f"STT transcription error: {e}")
+            return STTResult(
+                text="",
+                emotion=Emotion.NEUTRAL,
+                language="unknown",
+                confidence=0.0,
+                is_final=True,
+                processing_time_ms=(time.time() - start_time) * 1000,
+            )
+
+    async def _transcribe_whisper(
+        self,
+        audio: np.ndarray,
+        sample_rate: int,
+        language: str,
+        start_time: float,
+    ) -> STTResult:
+        """Whisper를 사용한 음성 인식"""
+        try:
+            # Whisper pipeline 실행
+            result = await asyncio.get_event_loop().run_in_executor(
+                None,
+                lambda: self._whisper_pipeline(
+                    {"sampling_rate": 16000, "raw": audio},
+                    generate_kwargs={
+                        "language": language if language != "auto" else None,
+                    },
+                ),
+            )
+
+            processing_time = (time.time() - start_time) * 1000
+            text = result.get("text", "").strip() if result else ""
+
+            # Whisper는 감정 인식을 지원하지 않으므로 NEUTRAL 반환
+            return STTResult(
+                text=text,
+                emotion=Emotion.NEUTRAL,
+                language=language if language != "auto" else "unknown",
+                confidence=0.8 if text else 0.0,  # Whisper는 confidence 미제공
+                is_final=True,
+                processing_time_ms=processing_time,
+            )
+
+        except Exception as e:
+            logger.error(f"Whisper transcription error: {e}")
             return STTResult(
                 text="",
                 emotion=Emotion.NEUTRAL,
@@ -315,5 +407,9 @@ class STTModule:
         if self.model is not None:
             del self.model
             self.model = None
+        if self._whisper_pipeline is not None:
+            del self._whisper_pipeline
+            self._whisper_pipeline = None
+        self._use_whisper = False
         self._initialized = False
         logger.info("STT module cleaned up")
