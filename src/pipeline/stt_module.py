@@ -151,12 +151,12 @@ class STTModule:
 
         if self.model is None:
             # Mock result for testing without model
-            logger.debug("Using mock STT result (model not loaded)")
+            logger.warning("STT model not loaded - returning mock result. Check model initialization.")
             return STTResult(
-                text="[Mock] 안녕하세요",
+                text="",  # 빈 텍스트 반환 (Mock 데이터가 히스토리에 저장되지 않도록)
                 emotion=Emotion.NEUTRAL,
-                language="ko",
-                confidence=0.95,
+                language="unknown",
+                confidence=0.0,
                 is_final=True,
                 processing_time_ms=(time.time() - start_time) * 1000,
             )

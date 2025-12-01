@@ -34,6 +34,11 @@ class AvatarWebSocketHandler:
         """
         self.pipeline = pipeline
         self._active_connections: dict = {}
+        # 상수 캐싱 (매 호출마다 재계산 방지)
+        self._max_audio_buffer_size: int = (
+            pipeline.settings.audio_sample_rate * 2 *
+            pipeline.settings.audio_buffer_max_seconds
+        )
 
     async def handle_connection(
         self,
@@ -71,6 +76,7 @@ class AvatarWebSocketHandler:
             "processing_audio": False,
             "audio_buffer": deque(),  # 오디오 청크 버퍼
             "audio_buffer_size": 0,   # 현재 버퍼 크기 (바이트)
+            "stream_lock": asyncio.Lock(),  # 스트리밍 상태 동기화용 락
         }
 
         try:
@@ -91,17 +97,23 @@ class AvatarWebSocketHandler:
 
                 if message["type"] == "websocket.receive":
                     if "bytes" in message:
-                        # 오디오 데이터 처리
-                        logger.debug(f"Received audio bytes: {len(message['bytes'])} bytes")
-                        await self._handle_audio(
-                            websocket, message["bytes"], uuid_session
-                        )
+                        audio_data = message["bytes"]
+                        # 오디오 청크 크기 검증
+                        if len(audio_data) > self.pipeline.settings.max_audio_chunk_size:
+                            logger.warning(f"Audio chunk too large: {len(audio_data)} bytes")
+                            await self._send_error(websocket, "Audio chunk too large")
+                            continue
+                        logger.debug(f"Received audio bytes: {len(audio_data)} bytes")
+                        await self._handle_audio(websocket, audio_data, uuid_session)
                     elif "text" in message:
-                        # 제어 메시지 처리
-                        logger.debug(f"Received text message: {message['text'][:100]}...")
-                        await self._handle_control(
-                            websocket, message["text"], uuid_session
-                        )
+                        text_data = message["text"]
+                        # 메시지 크기 검증
+                        if len(text_data) > self.pipeline.settings.max_message_size_bytes:
+                            logger.warning(f"Message too large: {len(text_data)} bytes")
+                            await self._send_error(websocket, "Message too large")
+                            continue
+                        logger.debug(f"Received text message: {text_data[:100]}...")
+                        await self._handle_control(websocket, text_data, uuid_session)
                     else:
                         logger.warning(f"Unknown message format: {message}")
 
@@ -145,13 +157,15 @@ class AvatarWebSocketHandler:
         if connection is None:
             return
 
-        # 이미 스트리밍 중이면 버퍼에 저장
-        if connection["is_streaming"]:
-            self._buffer_audio(connection, audio_data)
-            logger.debug(f"Audio buffered: {len(audio_data)} bytes (total: {connection['audio_buffer_size']} bytes)")
-            return
+        stream_lock = connection["stream_lock"]
 
-        connection["is_streaming"] = True
+        # 락을 사용하여 스트리밍 상태를 atomic하게 확인/설정
+        async with stream_lock:
+            if connection["is_streaming"]:
+                self._buffer_audio(connection, audio_data)
+                logger.debug(f"Audio buffered: {len(audio_data)} bytes (total: {connection['audio_buffer_size']} bytes)")
+                return
+            connection["is_streaming"] = True
 
         try:
             # 상태 업데이트
@@ -183,14 +197,8 @@ class AvatarWebSocketHandler:
         audio_buffer = connection["audio_buffer"]
         buffer_size = connection["audio_buffer_size"]
 
-        # 설정에서 최대 버퍼 크기 계산 (sample_rate * bytes_per_sample * max_seconds)
-        max_buffer_size = (
-            self.pipeline.settings.audio_sample_rate * 2 *
-            self.pipeline.settings.audio_buffer_max_seconds
-        )
-
         # 최대 버퍼 크기 초과 시 오래된 데이터 제거
-        while buffer_size + len(audio_data) > max_buffer_size and audio_buffer:
+        while buffer_size + len(audio_data) > self._max_audio_buffer_size and audio_buffer:
             removed = audio_buffer.popleft()
             buffer_size -= len(removed)
             logger.debug(f"Audio buffer overflow, removed {len(removed)} bytes")
@@ -272,8 +280,12 @@ class AvatarWebSocketHandler:
             elif msg_type == "chat":
                 # 텍스트 채팅 메시지 처리
                 text = message.get("text", "")
-                logger.debug(f"Chat message received: '{text[:50]}...'")
-                if text:
+                # 텍스트 길이 검증
+                if len(text) > self.pipeline.settings.max_text_length:
+                    logger.warning(f"Chat text too long: {len(text)} chars")
+                    await self._send_error(websocket, f"Text too long (max {self.pipeline.settings.max_text_length} chars)")
+                elif text:
+                    logger.debug(f"Chat message received: '{text[:50]}...'")
                     await self._handle_chat(websocket, text, session_id)
                 else:
                     logger.warning("Chat message text is empty")

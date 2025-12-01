@@ -137,10 +137,20 @@ async def create_avatar_session(
     Returns:
         SessionCreateResponse: 생성된 세션 정보
     """
+    # 시스템 프롬프트 검증
+    system_prompt = settings.system_prompt
+    if request.system_prompt:
+        if not settings.allow_custom_system_prompt:
+            logger.warning("Custom system prompt rejected: not allowed by configuration")
+        elif len(request.system_prompt) > settings.max_system_prompt_length:
+            logger.warning(f"Custom system prompt rejected: too long ({len(request.system_prompt)} > {settings.max_system_prompt_length})")
+        else:
+            system_prompt = request.system_prompt
+
     # 세션 생성
     session = pipeline.create_session(
         avatar_id=request.avatar_id,
-        system_prompt=request.system_prompt or settings.system_prompt,
+        system_prompt=system_prompt,
     )
 
     # WebSocket URL 생성

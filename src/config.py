@@ -105,6 +105,23 @@ class Settings(BaseSettings):
         default=10, description="Maximum audio buffer duration in seconds"
     )
 
+    # Security Settings
+    max_message_size_bytes: int = Field(
+        default=1048576, description="Maximum WebSocket message size (1MB)"
+    )
+    max_text_length: int = Field(
+        default=10000, description="Maximum chat text length (characters)"
+    )
+    max_audio_chunk_size: int = Field(
+        default=1048576, description="Maximum audio chunk size (1MB)"
+    )
+    max_system_prompt_length: int = Field(
+        default=2000, description="Maximum custom system prompt length"
+    )
+    allow_custom_system_prompt: bool = Field(
+        default=False, description="Allow users to set custom system prompts"
+    )
+
     # Server Settings
     host: str = Field(default="0.0.0.0", description="Server host")
     port: int = Field(default=8000, description="Server port")

@@ -140,8 +140,9 @@ class LLMModule:
                 return response.choices[0].message.content
 
         except Exception as e:
-            logger.error(f"LLM generation error: {e}")
-            return "죄송합니다. 응답을 생성하는 중 오류가 발생했습니다."
+            error_msg = self._get_error_message(e)
+            logger.error(f"LLM generation error: {type(e).__name__}: {e}")
+            return error_msg
 
     async def generate_stream(
         self,
@@ -187,9 +188,10 @@ class LLMModule:
                     yield response
 
         except Exception as e:
-            logger.error(f"LLM streaming error: {e}")
+            error_msg = self._get_error_message(e)
+            logger.error(f"LLM streaming error: {type(e).__name__}: {e}")
             yield LLMResponse(
-                text="죄송합니다. 응답을 생성하는 중 오류가 발생했습니다.",
+                text=error_msg,
                 is_complete=True,
                 token_count=0,
             )
@@ -367,6 +369,30 @@ class LLMModule:
         messages.append({"role": "user", "content": user_message})
 
         return messages
+
+    def _get_error_message(self, error: Exception) -> str:
+        """에러 유형에 따른 사용자 친화적 메시지 반환"""
+        error_type = type(error).__name__
+        error_str = str(error).lower()
+
+        # API 인증 오류
+        if "auth" in error_str or "api_key" in error_str or "401" in error_str:
+            return "죄송합니다. 서비스 인증에 문제가 있습니다. 관리자에게 문의해주세요."
+
+        # 요청 한도 초과
+        if "rate" in error_str or "limit" in error_str or "429" in error_str:
+            return "죄송합니다. 요청이 너무 많습니다. 잠시 후 다시 시도해주세요."
+
+        # 네트워크 오류
+        if "connection" in error_str or "timeout" in error_str or "network" in error_str:
+            return "죄송합니다. 네트워크 연결에 문제가 있습니다. 잠시 후 다시 시도해주세요."
+
+        # 콘텐츠 필터링
+        if "content" in error_str and ("filter" in error_str or "policy" in error_str):
+            return "죄송합니다. 해당 내용은 처리할 수 없습니다."
+
+        # 기본 오류 메시지
+        return "죄송합니다. 응답을 생성하는 중 오류가 발생했습니다."
 
     async def cleanup(self) -> None:
         """리소스 정리"""

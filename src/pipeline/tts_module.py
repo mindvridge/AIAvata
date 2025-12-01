@@ -12,6 +12,7 @@ Chatterbox 기반 텍스트-음성 변환 모듈
 import asyncio
 import io
 import logging
+import re
 import time
 from pathlib import Path
 from typing import AsyncGenerator, Optional
@@ -22,6 +23,10 @@ from ..models.schemas import TTSChunk
 from ..models.integrations import ChatterboxTTSModel
 
 logger = logging.getLogger(__name__)
+
+# 컴파일된 정규식 패턴 (성능 최적화)
+_SENTENCE_SPLIT_PATTERN = re.compile(r"(?<=[.!?。！？])\s+")
+_SENTENCE_END_PATTERN = re.compile(r"[.!?。！？]")
 
 
 class TTSModule:
@@ -266,11 +271,7 @@ class TTSModule:
 
     def _split_into_sentences(self, text: str) -> list:
         """텍스트를 문장 단위로 분리"""
-        import re
-
-        # 한국어/영어 문장 종결 패턴
-        pattern = r"(?<=[.!?。！？])\s+"
-        sentences = re.split(pattern, text)
+        sentences = _SENTENCE_SPLIT_PATTERN.split(text)
         return [s.strip() for s in sentences if s.strip()]
 
     def _extract_complete_sentences(self, text: str) -> tuple:
@@ -280,11 +281,8 @@ class TTSModule:
         Returns:
             (완성된 문장 리스트, 남은 텍스트)
         """
-        import re
-
         # 문장 종결 부호 위치 찾기
-        pattern = r"[.!?。！？]"
-        matches = list(re.finditer(pattern, text))
+        matches = list(_SENTENCE_END_PATTERN.finditer(text))
 
         if not matches:
             return [], text
