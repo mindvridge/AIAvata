@@ -232,35 +232,59 @@ class TTSModule:
         self,
         text_stream: AsyncGenerator[str, None],
         chunk_size: int = 4096,
+        initial_chunk_size: int = 1024,
+        min_text_for_early_synthesis: int = 20,
         voice_id: Optional[str] = None,
     ) -> AsyncGenerator[TTSChunk, None]:
         """
-        LLM 스트리밍 출력을 실시간으로 TTS 변환
+        LLM 스트리밍 출력을 실시간으로 TTS 변환 (지연시간 최적화)
 
         Args:
             text_stream: 텍스트 청크 스트림 (LLM 출력)
             chunk_size: 오디오 청크 크기
+            initial_chunk_size: 첫 출력용 작은 청크 크기
+            min_text_for_early_synthesis: 조기 합성 트리거 최소 텍스트 길이
             voice_id: 사용할 음성 ID
 
         Yields:
             TTSChunk: 오디오 청크
         """
         buffer = ""
+        is_first_chunk = True
+        total_synthesized = 0
 
         async for text_chunk in text_stream:
             buffer += text_chunk
 
             # 문장이 완성되면 즉시 합성
             sentences, remaining = self._extract_complete_sentences(buffer)
+
+            # 문장이 완성되지 않았지만 충분히 길면 조기 합성 (첫 출력 지연 감소)
+            if not sentences and len(buffer) >= min_text_for_early_synthesis:
+                # 쉼표나 공백으로 끝나는 자연스러운 구간에서 분리
+                split_point = self._find_early_split_point(buffer)
+                if split_point > 0:
+                    sentences = [buffer[:split_point]]
+                    remaining = buffer[split_point:]
+
             buffer = remaining
 
             for sentence in sentences:
+                # 첫 청크는 작은 크기로 빠른 출력
+                current_chunk_size = initial_chunk_size if is_first_chunk else chunk_size
+
                 async for audio_chunk in self.synthesize_stream(
-                    sentence, chunk_size, voice_id
+                    sentence, current_chunk_size, voice_id
                 ):
                     # 마지막 여부는 전체 스트림에서 결정되므로 False로 설정
                     audio_chunk.is_last = False
                     yield audio_chunk
+                    total_synthesized += 1
+
+                    # 첫 청크 출력 후 일반 크기로 전환
+                    if is_first_chunk:
+                        is_first_chunk = False
+                        logger.debug(f"First TTS chunk sent, switching to normal chunk size")
 
         # 남은 버퍼 처리
         if buffer.strip():
@@ -268,6 +292,36 @@ class TTSModule:
                 buffer, chunk_size, voice_id
             ):
                 yield audio_chunk
+                total_synthesized += 1
+
+        logger.debug(f"Realtime TTS stream completed: {total_synthesized} chunks sent")
+
+    def _find_early_split_point(self, text: str) -> int:
+        """
+        조기 합성을 위한 자연스러운 분리 지점 찾기
+
+        Args:
+            text: 분석할 텍스트
+
+        Returns:
+            분리 지점 인덱스 (없으면 0)
+        """
+        # 우선순위: 쉼표 > 공백 (단어 경계)
+        # 최소 10자 이상에서만 분리
+        if len(text) < 10:
+            return 0
+
+        # 쉼표 위치 찾기
+        comma_pos = text.rfind(',', 10, len(text) - 5)
+        if comma_pos > 0:
+            return comma_pos + 1
+
+        # 공백 위치 찾기 (단어 경계)
+        space_pos = text.rfind(' ', 10, len(text) - 5)
+        if space_pos > 0:
+            return space_pos + 1
+
+        return 0
 
     def _split_into_sentences(self, text: str) -> list:
         """텍스트를 문장 단위로 분리"""

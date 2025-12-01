@@ -10,12 +10,99 @@ import logging
 import time
 from collections import deque
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Optional, Callable
 from uuid import UUID
 
 from fastapi import WebSocket, WebSocketDisconnect
 
+from ..models.schemas import ConnectionState, CONNECTION_STATE_TRANSITIONS
+
 logger = logging.getLogger(__name__)
+
+
+class ConnectionStateMachine:
+    """
+    WebSocket 연결 상태 머신
+
+    상태 전이를 관리하고 유효하지 않은 전이를 방지합니다.
+    """
+
+    def __init__(
+        self,
+        initial_state: ConnectionState = ConnectionState.CONNECTING,
+        on_state_change: Optional[Callable[[ConnectionState, ConnectionState], None]] = None,
+    ):
+        self._state = initial_state
+        self._on_state_change = on_state_change
+        self._state_history: list[tuple[float, ConnectionState]] = [
+            (time.time(), initial_state)
+        ]
+
+    @property
+    def state(self) -> ConnectionState:
+        """현재 상태 반환"""
+        return self._state
+
+    @property
+    def state_history(self) -> list[tuple[float, ConnectionState]]:
+        """상태 변경 이력 반환"""
+        return self._state_history.copy()
+
+    def can_transition_to(self, new_state: ConnectionState) -> bool:
+        """주어진 상태로 전이 가능한지 확인"""
+        valid_transitions = CONNECTION_STATE_TRANSITIONS.get(self._state, set())
+        return new_state in valid_transitions
+
+    def transition_to(self, new_state: ConnectionState, force: bool = False) -> bool:
+        """
+        새 상태로 전이
+
+        Args:
+            new_state: 전이할 상태
+            force: True이면 유효성 검사 무시
+
+        Returns:
+            전이 성공 여부
+        """
+        if not force and not self.can_transition_to(new_state):
+            logger.warning(
+                f"Invalid state transition: {self._state.value} → {new_state.value}"
+            )
+            return False
+
+        old_state = self._state
+        self._state = new_state
+        self._state_history.append((time.time(), new_state))
+
+        # 이력 크기 제한 (최근 100개만 유지)
+        if len(self._state_history) > 100:
+            self._state_history = self._state_history[-100:]
+
+        logger.debug(f"State transition: {old_state.value} → {new_state.value}")
+
+        if self._on_state_change:
+            try:
+                self._on_state_change(old_state, new_state)
+            except Exception as e:
+                logger.error(f"State change callback error: {e}")
+
+        return True
+
+    def is_active(self) -> bool:
+        """연결이 활성 상태인지 확인"""
+        return self._state in {
+            ConnectionState.CONNECTED,
+            ConnectionState.IDLE_STREAMING,
+            ConnectionState.PROCESSING,
+            ConnectionState.SPEAKING,
+        }
+
+    def is_busy(self) -> bool:
+        """처리 중인 상태인지 확인"""
+        return self._state in {
+            ConnectionState.PROCESSING,
+            ConnectionState.SPEAKING,
+        }
 
 
 @dataclass
@@ -94,13 +181,17 @@ class AvatarWebSocketHandler:
                 logger.info(f"Session {uuid_session} reconnect window expired ({elapsed:.1f}s > {self._reconnect_window}s)")
                 restored_state = None
 
+        # 상태 머신 생성
+        state_machine = ConnectionStateMachine(
+            initial_state=ConnectionState.CONNECTING
+        )
+
         # 연결 등록
         self._active_connections[connection_id] = {
             "websocket": websocket,
             "session_id": uuid_session,
-            "is_streaming": False,
+            "state_machine": state_machine,
             "idle_task": None,
-            "processing_audio": False,
             "audio_buffer": restored_state.audio_buffer if restored_state else deque(),
             "audio_buffer_size": restored_state.audio_buffer_size if restored_state else 0,
             "stream_lock": asyncio.Lock(),  # 스트리밍 상태 동기화용 락
@@ -110,16 +201,20 @@ class AvatarWebSocketHandler:
         }
 
         try:
+            # 연결 완료 상태로 전이
+            state_machine.transition_to(ConnectionState.CONNECTED)
+
             # 초기 상태 전송 (재연결 시 restored 상태 포함)
             if restored_state:
                 await self._send_json(websocket, {
                     "type": "status",
                     "status": "reconnected",
+                    "connection_state": state_machine.state.value,
                     "session_id": str(uuid_session),
                     "buffered_audio_bytes": restored_state.audio_buffer_size,
                 })
             else:
-                await self._send_status(websocket, "connected")
+                await self._send_state_status(websocket, state_machine.state)
 
             # Heartbeat 태스크 시작
             heartbeat_task = asyncio.create_task(
@@ -195,6 +290,12 @@ class AvatarWebSocketHandler:
             # 세션 상태 저장 (재연결 지원)
             if connection_id in self._active_connections:
                 conn = self._active_connections[connection_id]
+                state_machine: ConnectionStateMachine = conn.get("state_machine")
+
+                # DISCONNECTED 상태로 전이
+                if state_machine:
+                    state_machine.transition_to(ConnectionState.DISCONNECTED, force=True)
+
                 if conn.get("session_id"):
                     # 만료된 세션 정리
                     self._cleanup_expired_disconnected_sessions()
@@ -204,7 +305,7 @@ class AvatarWebSocketHandler:
                         disconnected_at=time.time(),
                         audio_buffer=conn.get("audio_buffer", deque()),
                         audio_buffer_size=conn.get("audio_buffer_size", 0),
-                        was_streaming=conn.get("is_streaming", False),
+                        was_streaming=state_machine.is_busy() if state_machine else False,
                     )
                     logger.info(f"Session {conn['session_id']} state saved for reconnection")
                 del self._active_connections[connection_id]
@@ -229,19 +330,24 @@ class AvatarWebSocketHandler:
         if connection is None:
             return
 
+        state_machine: ConnectionStateMachine = connection["state_machine"]
         stream_lock = connection["stream_lock"]
 
-        # 락을 사용하여 스트리밍 상태를 atomic하게 확인/설정
+        # 락을 사용하여 상태를 atomic하게 확인/전이
         async with stream_lock:
-            if connection["is_streaming"]:
+            # 이미 처리 중이면 버퍼링
+            if state_machine.is_busy():
                 self._buffer_audio(connection, audio_data)
                 logger.debug(f"Audio buffered: {len(audio_data)} bytes (total: {connection['audio_buffer_size']} bytes)")
                 return
-            connection["is_streaming"] = True
+            # PROCESSING 상태로 전이
+            if not state_machine.transition_to(ConnectionState.PROCESSING):
+                logger.warning("Failed to transition to PROCESSING state")
+                return
 
         try:
-            # 상태 업데이트
-            await self._send_status(websocket, "processing")
+            # 상태 업데이트 전송
+            await self._send_state_status(websocket, state_machine.state)
 
             # 파이프라인 처리 및 프레임 스트리밍
             async for frame in self.pipeline.process_audio_input(
@@ -254,15 +360,16 @@ class AvatarWebSocketHandler:
             # 처리 완료 후 버퍼에 있는 오디오 처리
             await self._process_buffered_audio(websocket, connection, session_id)
 
-            # 처리 완료
-            await self._send_status(websocket, "idle")
+            # IDLE_STREAMING 상태로 복귀
+            state_machine.transition_to(ConnectionState.IDLE_STREAMING)
+            await self._send_state_status(websocket, state_machine.state)
 
         except Exception as e:
             logger.error(f"Audio processing error: {e}")
+            state_machine.transition_to(ConnectionState.ERROR)
             await self._send_error(websocket, f"Processing error: {e}")
-
-        finally:
-            connection["is_streaming"] = False
+            # 에러 후 CONNECTED 상태로 복구
+            state_machine.transition_to(ConnectionState.CONNECTED)
 
     def _buffer_audio(self, connection: dict, audio_data: bytes) -> None:
         """오디오 데이터를 버퍼에 추가 (최대 크기 제한 적용)"""
@@ -413,16 +520,21 @@ class AvatarWebSocketHandler:
         if connection is None:
             return
 
-        # 이미 스트리밍 중이거나 오디오 처리 중이면 건너뛰기
-        if connection.get("is_streaming") or connection.get("processing_audio"):
-            logger.debug(f"Idle stream skipped: is_streaming={connection.get('is_streaming')}, processing_audio={connection.get('processing_audio')}")
+        state_machine: ConnectionStateMachine = connection["state_machine"]
+
+        # 이미 처리 중이면 건너뛰기
+        if state_machine.is_busy():
+            logger.debug(f"Idle stream skipped: state={state_machine.state.value}")
             return
 
-        connection["is_streaming"] = True
+        # IDLE_STREAMING 상태로 전이
+        if not state_machine.transition_to(ConnectionState.IDLE_STREAMING):
+            logger.debug(f"Cannot transition to IDLE_STREAMING from {state_machine.state.value}")
+            return
 
         try:
             logger.info(f"Starting auto idle stream for connection: {connection_id}")
-            await self._send_status(websocket, "idle_streaming")
+            await self._send_state_status(websocket, state_machine.state)
 
             frame_count = 0
             async for frame in self.pipeline.stream_idle(
@@ -433,17 +545,16 @@ class AvatarWebSocketHandler:
                 if connection_id not in self._active_connections:
                     logger.info(f"Connection {connection_id} closed, stopping idle stream")
                     break
-                
-                # 오디오 처리 중이면 idle 프레임 건너뛰기
-                connection_check = self._active_connections.get(connection_id)
-                if connection_check and connection_check.get("processing_audio"):
+
+                # 처리 중 상태로 변경되면 idle 프레임 건너뛰기
+                if state_machine.is_busy():
                     continue
 
                 try:
                     frame_count += 1
                     if frame_count % 30 == 0:  # 매 30프레임마다 로그
                         logger.debug(f"Sent {frame_count} idle frames to connection {connection_id}")
-                    
+
                     await websocket.send_bytes(frame.data)
                 except Exception as e:
                     logger.error(f"Error sending idle frame: {e}")
@@ -455,7 +566,8 @@ class AvatarWebSocketHandler:
             logger.error(f"Auto idle streaming error: {e}")
         finally:
             if connection_id in self._active_connections:
-                self._active_connections[connection_id]["is_streaming"] = False
+                # CONNECTED 상태로 복귀
+                state_machine.transition_to(ConnectionState.CONNECTED, force=True)
 
     async def _handle_start_idle(
         self,
@@ -469,14 +581,20 @@ class AvatarWebSocketHandler:
         if connection is None:
             return
 
-        if connection["is_streaming"]:
+        state_machine: ConnectionStateMachine = connection["state_machine"]
+
+        # 이미 처리 중이면 에러
+        if state_machine.is_busy():
             await self._send_error(websocket, "Already streaming")
             return
 
-        connection["is_streaming"] = True
+        # IDLE_STREAMING 상태로 전이
+        if not state_machine.transition_to(ConnectionState.IDLE_STREAMING):
+            await self._send_error(websocket, f"Cannot start idle from {state_machine.state.value}")
+            return
 
         try:
-            await self._send_status(websocket, "idle_streaming")
+            await self._send_state_status(websocket, state_machine.state)
 
             async for frame in self.pipeline.stream_idle(
                 session_id=session_id,
@@ -493,7 +611,7 @@ class AvatarWebSocketHandler:
 
         finally:
             if connection_id in self._active_connections:
-                self._active_connections[connection_id]["is_streaming"] = False
+                state_machine.transition_to(ConnectionState.CONNECTED, force=True)
 
     async def _handle_chat(
         self,
@@ -515,7 +633,11 @@ class AvatarWebSocketHandler:
         if connection is None:
             return
 
+        state_machine: ConnectionStateMachine = connection["state_machine"]
         logger.info(f"Chat message received: {text[:50]}...")
+
+        # PROCESSING 상태로 전이
+        state_machine.transition_to(ConnectionState.PROCESSING)
 
         # 세션 가져오기
         session = None
@@ -593,7 +715,7 @@ class AvatarWebSocketHandler:
     ):
         """
         TTS로 음성 생성 및 립싱크 비디오 스트리밍
-        
+
         Args:
             websocket: WebSocket 연결
             response_text: LLM 응답 텍스트
@@ -606,6 +728,7 @@ class AvatarWebSocketHandler:
             logger.error("Connection not found, cannot process TTS")
             return
 
+        state_machine: ConnectionStateMachine = connection["state_machine"]
         logger.debug(f"Processing TTS for response: '{response_text[:50]}...'")
 
         # idle 스트림 중지 (채팅 처리 시작 전)
@@ -620,19 +743,8 @@ class AvatarWebSocketHandler:
                     pass
                 connection["idle_task"] = None
 
-        # idle 스트림이 is_streaming을 False로 설정할 때까지 대기
-        if connection.get("is_streaming"):
-            logger.debug("Waiting for idle stream to stop")
-            for _ in range(10):  # 최대 1초 대기
-                await asyncio.sleep(0.1)
-                if not connection.get("is_streaming"):
-                    break
-            if connection.get("is_streaming"):
-                logger.warning("Still streaming, forcing stop for chat processing")
-                connection["is_streaming"] = False
-
-        connection["is_streaming"] = True
-        connection["processing_audio"] = True
+        # SPEAKING 상태로 전이
+        state_machine.transition_to(ConnectionState.SPEAKING)
 
         try:
 
@@ -695,9 +807,11 @@ class AvatarWebSocketHandler:
 
                 logger.debug(f"Lipsync video stream completed: {frame_count} frames sent")
 
-                # 립싱크 완료 후 idle 스트림 재시작
-                await self._send_status(websocket, "idle")
+                # 립싱크 완료 후 CONNECTED 상태로 전이 및 idle 스트림 재시작
                 if connection_id in self._active_connections:
+                    state_machine.transition_to(ConnectionState.CONNECTED)
+                    await self._send_state_status(websocket, state_machine.state)
+
                     connection = self._active_connections[connection_id]
                     if not connection.get("idle_task") or (hasattr(connection["idle_task"], 'done') and connection["idle_task"].done()):
                         logger.debug("Restarting idle stream after lip sync")
@@ -705,17 +819,18 @@ class AvatarWebSocketHandler:
                             self._start_idle_stream_background(websocket, session_id, connection_id)
                         )
                         connection["idle_task"] = idle_task
-                        connection["is_streaming"] = False  # idle 스트림이 시작되면 다시 True로 설정됨
             except Exception as e:
                 logger.error(f"Error in render_with_audio: {e}", exc_info=True)
 
         except Exception as e:
             logger.error(f"TTS/Lipsync processing error: {e}")
+            state_machine.transition_to(ConnectionState.ERROR)
 
         finally:
             if connection_id in self._active_connections:
-                self._active_connections[connection_id]["processing_audio"] = False
-                self._active_connections[connection_id]["is_streaming"] = False
+                # 에러 상태가 아니면 CONNECTED로 복귀
+                if state_machine.state == ConnectionState.ERROR:
+                    state_machine.transition_to(ConnectionState.CONNECTED)
 
     async def _handle_get_status(
         self,
@@ -741,8 +856,16 @@ class AvatarWebSocketHandler:
         await self._send_json(websocket, status)
 
     async def _send_status(self, websocket: WebSocket, status: str):
-        """상태 메시지 전송"""
+        """상태 메시지 전송 (레거시 호환)"""
         await self._send_json(websocket, {"type": "status", "status": status})
+
+    async def _send_state_status(self, websocket: WebSocket, state: ConnectionState):
+        """상태 머신 상태 메시지 전송"""
+        await self._send_json(websocket, {
+            "type": "status",
+            "status": state.value,
+            "connection_state": state.value,
+        })
 
     async def _send_error(self, websocket: WebSocket, error: str):
         """에러 메시지 전송"""

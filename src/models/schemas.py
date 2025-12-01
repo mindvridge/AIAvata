@@ -24,6 +24,70 @@ class PipelineState(str, Enum):
     ERROR = "error"
 
 
+class ConnectionState(str, Enum):
+    """WebSocket 연결 상태"""
+
+    CONNECTING = "connecting"      # 연결 초기화 중
+    CONNECTED = "connected"        # 연결됨, 대기 상태
+    IDLE_STREAMING = "idle_streaming"  # Idle 비디오 스트리밍 중
+    PROCESSING = "processing"      # 오디오/텍스트 처리 중
+    SPEAKING = "speaking"          # TTS + 립싱크 출력 중
+    RECONNECTING = "reconnecting"  # 재연결 시도 중
+    DISCONNECTED = "disconnected"  # 연결 끊김
+    ERROR = "error"                # 에러 상태
+
+
+# 유효한 상태 전이 정의
+CONNECTION_STATE_TRANSITIONS: dict[ConnectionState, set[ConnectionState]] = {
+    ConnectionState.CONNECTING: {
+        ConnectionState.CONNECTED,
+        ConnectionState.ERROR,
+        ConnectionState.DISCONNECTED,
+    },
+    ConnectionState.CONNECTED: {
+        ConnectionState.IDLE_STREAMING,
+        ConnectionState.PROCESSING,
+        ConnectionState.DISCONNECTED,
+        ConnectionState.ERROR,
+    },
+    ConnectionState.IDLE_STREAMING: {
+        ConnectionState.PROCESSING,
+        ConnectionState.SPEAKING,
+        ConnectionState.CONNECTED,
+        ConnectionState.DISCONNECTED,
+        ConnectionState.ERROR,
+    },
+    ConnectionState.PROCESSING: {
+        ConnectionState.SPEAKING,
+        ConnectionState.IDLE_STREAMING,
+        ConnectionState.CONNECTED,
+        ConnectionState.ERROR,
+        ConnectionState.DISCONNECTED,
+    },
+    ConnectionState.SPEAKING: {
+        ConnectionState.IDLE_STREAMING,
+        ConnectionState.PROCESSING,
+        ConnectionState.CONNECTED,
+        ConnectionState.DISCONNECTED,
+        ConnectionState.ERROR,
+    },
+    ConnectionState.RECONNECTING: {
+        ConnectionState.CONNECTED,
+        ConnectionState.DISCONNECTED,
+        ConnectionState.ERROR,
+    },
+    ConnectionState.DISCONNECTED: {
+        ConnectionState.RECONNECTING,
+        ConnectionState.CONNECTING,
+    },
+    ConnectionState.ERROR: {
+        ConnectionState.CONNECTED,
+        ConnectionState.DISCONNECTED,
+        ConnectionState.RECONNECTING,
+    },
+}
+
+
 class AudioChunk(BaseModel):
     """오디오 청크 데이터"""
 

@@ -85,6 +85,15 @@ class Settings(BaseSettings):
     tts_chunk_size: int = Field(
         default=4096, description="TTS audio chunk size in bytes"
     )
+    tts_initial_chunk_size: int = Field(
+        default=1024, description="Initial TTS chunk size for faster first output"
+    )
+    tts_min_text_for_early_synthesis: int = Field(
+        default=20, description="Minimum text length to trigger early synthesis"
+    )
+    tts_stream_buffer_ms: int = Field(
+        default=100, description="Stream buffer size in milliseconds"
+    )
     
     # STT Model Settings
     stt_model_path: str = Field(
