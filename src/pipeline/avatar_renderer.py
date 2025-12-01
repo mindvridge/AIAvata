@@ -493,7 +493,7 @@ class AvatarRenderer:
         samples_per_frame = int(audio_sample_rate / self.target_fps)
         bytes_per_frame = samples_per_frame * 2  # 16-bit audio
         
-        logger.info(f"🎬 Starting audio stream rendering: sample_rate={audio_sample_rate}, fps={self.target_fps}, bytes_per_frame={bytes_per_frame}, MuseTalk available={self._musetalk_model is not None}")
+        logger.debug(f"Starting audio stream rendering: sample_rate={audio_sample_rate}, fps={self.target_fps}, bytes_per_frame={bytes_per_frame}, MuseTalk available={self._musetalk_model is not None}")
 
         async for audio_chunk in audio_stream:
             audio_buffer += audio_chunk
@@ -558,7 +558,7 @@ class AvatarRenderer:
                 audio_array = np.frombuffer(audio_chunk, dtype=np.int16).astype(np.float32)
                 audio_array = audio_array / 32767.0  # Normalize to [-1, 1]
 
-                logger.info(f"🎤 Applying MuseTalk lip sync: frame shape={frame.shape}, audio samples={len(audio_array)}")
+                logger.debug(f"Applying MuseTalk lip sync: frame shape={frame.shape}, audio samples={len(audio_array)}")
 
                 # MuseTalk 추론
                 lipsync_frame = await self._musetalk_model.process_frame(
@@ -566,22 +566,20 @@ class AvatarRenderer:
                     audio_chunk=audio_array,
                     audio_sample_rate=24000,
                 )
-                
+
                 if lipsync_frame is not None and lipsync_frame.shape == frame.shape:
-                    logger.info(f"✅ MuseTalk lip sync successful: output shape={lipsync_frame.shape}")
+                    logger.debug(f"MuseTalk lip sync successful: output shape={lipsync_frame.shape}")
                     return lipsync_frame
                 else:
                     if lipsync_frame is None:
-                        logger.warning("⚠️ MuseTalk returned None, using simulation")
+                        logger.warning("MuseTalk returned None, using simulation")
                     else:
-                        logger.warning(f"⚠️ MuseTalk output shape mismatch: expected {frame.shape}, got {lipsync_frame.shape}, using simulation")
+                        logger.warning(f"MuseTalk output shape mismatch: expected {frame.shape}, got {lipsync_frame.shape}, using simulation")
             except Exception as e:
-                logger.error(f"❌ MuseTalk lip sync failed: {e}", exc_info=True)
+                logger.error(f"MuseTalk lip sync failed: {e}", exc_info=True)
 
         # MuseTalk이 없거나 실패하면 간단한 시뮬레이션 사용
-        if not self._musetalk_model:
-            logger.warning("⚠️ MuseTalk model not available, using simulation")
-        logger.info("🔄 Using lip sync simulation")
+        logger.debug("Using lip sync simulation")
         return await self._simulate_lipsync(frame, audio_chunk)
 
     async def _simulate_lipsync(

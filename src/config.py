@@ -92,6 +92,19 @@ class Settings(BaseSettings):
         description="STT model path (ModelScope repository path)"
     )
 
+    # Session Settings
+    session_ttl_seconds: int = Field(
+        default=1800, description="Session TTL in seconds (default: 30 minutes)"
+    )
+    session_cleanup_interval_seconds: int = Field(
+        default=60, description="Session cleanup check interval in seconds"
+    )
+
+    # Audio Buffer Settings
+    audio_buffer_max_seconds: int = Field(
+        default=10, description="Maximum audio buffer duration in seconds"
+    )
+
     # Server Settings
     host: str = Field(default="0.0.0.0", description="Server host")
     port: int = Field(default=8000, description="Server port")

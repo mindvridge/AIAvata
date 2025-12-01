@@ -124,27 +124,27 @@ class TTSModule:
 
         if self._chatterbox_model is None:
             # Mock audio for testing
-            logger.warning(f"⚠️ TTS model not loaded, using mock audio for text: '{text[:50]}...'")
+            logger.warning(f"TTS model not loaded, using mock audio for text: '{text[:50]}...'")
             return self._generate_mock_audio(len(text))
 
         try:
             # Chatterbox TTS 추론
-            logger.info(f"🎙️ Calling Chatterbox TTS synthesize: text='{text[:50]}...', voice_id={use_voice_id}")
+            logger.debug(f"Calling Chatterbox TTS synthesize: text='{text[:50]}...', voice_id={use_voice_id}")
             audio = await self._chatterbox_model.synthesize(
                 text=text,
                 voice_id=use_voice_id,
             )
-            
+
             if audio is not None and len(audio) > 0:
-                logger.info(f"✅ TTS synthesize completed: {len(audio)} samples")
+                logger.debug(f"TTS synthesize completed: {len(audio)} samples")
             else:
-                logger.warning(f"⚠️ TTS synthesize returned empty audio: {audio}")
-            
+                logger.warning("TTS synthesize returned empty audio")
+
             return audio
 
         except Exception as e:
-            logger.error(f"❌ TTS synthesis error: {e}", exc_info=True)
-            logger.warning(f"⚠️ Falling back to mock audio for text: '{text[:50]}...'")
+            logger.error(f"TTS synthesis error: {e}", exc_info=True)
+            logger.warning(f"Falling back to mock audio for text: '{text[:50]}...'")
             return self._generate_mock_audio(len(text))
 
     async def synthesize_stream(
@@ -315,7 +315,7 @@ class TTSModule:
         frequency = 440  # A4 음
         audio = 0.3 * np.sin(2 * np.pi * frequency * t).astype(np.float32)
         
-        logger.info(f"📢 Generated mock audio: {duration_samples} samples ({duration_samples/self.sample_rate:.2f}s)")
+        logger.debug(f"Generated mock audio: {duration_samples} samples ({duration_samples/self.sample_rate:.2f}s)")
         return audio
 
     async def cleanup(self) -> None:

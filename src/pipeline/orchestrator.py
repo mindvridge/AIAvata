@@ -13,6 +13,7 @@ Flow:
 import asyncio
 import logging
 import time
+from datetime import datetime, timedelta
 from typing import AsyncGenerator, Dict, List, Optional, Any
 from uuid import UUID
 
@@ -82,6 +83,7 @@ class PipelineOrchestrator:
         # 세션 관리
         self._sessions: Dict[UUID, AvatarSession] = {}
         self._initialized = False
+        self._cleanup_task: Optional[asyncio.Task] = None
 
         # 성능 메트릭
         self._metrics = {
@@ -106,7 +108,40 @@ class PipelineOrchestrator:
         )
 
         self._initialized = True
+
+        # 세션 TTL 클린업 백그라운드 태스크 시작
+        self._cleanup_task = asyncio.create_task(self._session_cleanup_loop())
         logger.info("Pipeline Orchestrator initialized successfully")
+
+    async def _session_cleanup_loop(self) -> None:
+        """만료된 세션을 주기적으로 정리하는 백그라운드 태스크"""
+        while self._initialized:
+            try:
+                await asyncio.sleep(self.settings.session_cleanup_interval_seconds)
+                expired_count = self._cleanup_expired_sessions()
+                if expired_count > 0:
+                    logger.info(f"Cleaned up {expired_count} expired sessions")
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.error(f"Session cleanup error: {e}")
+
+    def _cleanup_expired_sessions(self) -> int:
+        """만료된 세션 정리 및 정리된 세션 수 반환"""
+        now = datetime.now()
+        ttl = timedelta(seconds=self.settings.session_ttl_seconds)
+        expired_ids = [
+            sid for sid, session in self._sessions.items()
+            if (now - session.last_activity) > ttl
+        ]
+        for sid in expired_ids:
+            del self._sessions[sid]
+            logger.debug(f"Session {sid} expired and removed")
+        return len(expired_ids)
+
+    def _update_session_activity(self, session: AvatarSession) -> None:
+        """세션의 마지막 활동 시간 업데이트"""
+        session.last_activity = datetime.now()
 
     def _ensure_initialized(self) -> None:
         """초기화 확인"""
@@ -193,6 +228,7 @@ class PipelineOrchestrator:
         # 상태 업데이트
         session.pipeline_state = PipelineState.LISTENING
         session.total_interactions += 1
+        self._update_session_activity(session)
 
         try:
             # 1. STT + 감정 인식
@@ -370,6 +406,15 @@ class PipelineOrchestrator:
     async def cleanup(self) -> None:
         """모든 리소스 정리"""
         logger.info("Cleaning up Pipeline Orchestrator...")
+
+        # 세션 클린업 백그라운드 태스크 정지
+        if self._cleanup_task:
+            self._cleanup_task.cancel()
+            try:
+                await self._cleanup_task
+            except asyncio.CancelledError:
+                pass
+            self._cleanup_task = None
 
         await asyncio.gather(
             self.stt.cleanup(),
