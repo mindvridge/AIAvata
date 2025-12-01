@@ -202,15 +202,150 @@ def setup_face() -> bool:
         return False
 
 
+def download_musetalk_source(target_dir: Path = None) -> bool:
+    """
+    MuseTalk 소스 코드 자동 다운로드
+    
+    Args:
+        target_dir: 다운로드할 디렉토리 (기본값: external/MuseTalk)
+        
+    Returns:
+        다운로드 성공 여부
+    """
+    if target_dir is None:
+        target_dir = Path("external/MuseTalk")
+    
+    # 이미 존재하면 건너뛰기
+    if target_dir.exists() and (target_dir / "musetalk").exists():
+        logger.info(f"MuseTalk source code already exists at {target_dir}")
+        return True
+    
+    logger.info(f"Downloading MuseTalk source code to {target_dir}...")
+    target_dir.parent.mkdir(parents=True, exist_ok=True)
+    
+    repo_url = MODEL_CONFIGS["lipsync"]["repo"]
+    
+    # 방법 1: Git clone 시도
+    try:
+        import subprocess
+        
+        # Git이 설치되어 있는지 확인
+        result = subprocess.run(
+            ["git", "--version"],
+            capture_output=True,
+            text=True,
+            timeout=5
+        )
+        
+        if result.returncode == 0:
+            logger.info("Using Git to clone MuseTalk repository...")
+            
+            # 기존 디렉토리가 있으면 제거
+            if target_dir.exists():
+                import shutil
+                shutil.rmtree(target_dir)
+            
+            # Git clone 실행
+            result = subprocess.run(
+                ["git", "clone", "--depth", "1", repo_url, str(target_dir)],
+                check=True,
+                capture_output=True,
+                text=True,
+                timeout=300  # 5분 타임아웃
+            )
+            
+            logger.info("MuseTalk source code downloaded successfully via Git")
+            return True
+            
+    except (subprocess.TimeoutExpired, subprocess.CalledProcessError) as e:
+        logger.warning(f"Git clone failed: {e}. Trying alternative method...")
+    except FileNotFoundError:
+        logger.info("Git not found. Trying alternative method...")
+    except Exception as e:
+        logger.warning(f"Git clone error: {e}. Trying alternative method...")
+    
+    # 방법 2: GitHub ZIP 파일 다운로드
+    try:
+        import urllib.request
+        import zipfile
+        import tempfile
+        
+        logger.info("Downloading MuseTalk source code as ZIP file...")
+        
+        # GitHub ZIP URL
+        zip_url = f"{repo_url}/archive/refs/heads/main.zip"
+        
+        # 임시 파일로 다운로드
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".zip") as tmp_file:
+            tmp_path = Path(tmp_file.name)
+        
+        try:
+            # ZIP 파일 다운로드
+            logger.info(f"Downloading from {zip_url}...")
+            urllib.request.urlretrieve(zip_url, tmp_path)
+            
+            # ZIP 파일 압축 해제
+            logger.info("Extracting ZIP file...")
+            with zipfile.ZipFile(tmp_path, 'r') as zip_ref:
+                # 임시 디렉토리에 압축 해제
+                extract_dir = tmp_path.parent / "musetalk_extract"
+                extract_dir.mkdir(exist_ok=True)
+                zip_ref.extractall(extract_dir)
+                
+                # 압축 해제된 디렉토리 찾기 (MuseTalk-main)
+                extracted_dirs = list(extract_dir.glob("MuseTalk-*"))
+                if extracted_dirs:
+                    extracted_dir = extracted_dirs[0]
+                    
+                    # 기존 디렉토리가 있으면 제거
+                    if target_dir.exists():
+                        import shutil
+                        shutil.rmtree(target_dir)
+                    
+                    # 목표 디렉토리로 이동
+                    extracted_dir.rename(target_dir)
+                    logger.info(f"MuseTalk source code downloaded successfully to {target_dir}")
+                    
+                    # 정리
+                    extract_dir.rmdir()
+                    return True
+                else:
+                    logger.error("Could not find extracted MuseTalk directory")
+                    return False
+                    
+        finally:
+            # 임시 파일 정리
+            if tmp_path.exists():
+                tmp_path.unlink()
+                
+    except Exception as e:
+        logger.error(f"Failed to download MuseTalk source code: {e}")
+        logger.warning(
+            f"Please manually download MuseTalk:\n"
+            f"  git clone {repo_url} {target_dir}\n"
+            f"  Or download from: {repo_url}/archive/refs/heads/main.zip"
+        )
+        return False
+
+
 def setup_lipsync(device: str = "cuda") -> bool:
     """MuseTalk 립싱크 모델 설정"""
     logger.info("Setting up MuseTalk lip sync model...")
 
     model_dir = Path(MODEL_CONFIGS["lipsync"]["model_dir"])
     model_dir.mkdir(parents=True, exist_ok=True)
+    
+    # 1. 소스 코드 다운로드 (자동)
+    source_dir = Path("external/MuseTalk")
+    if not source_dir.exists() or not (source_dir / "musetalk").exists():
+        logger.info("MuseTalk source code not found. Downloading automatically...")
+        if not download_musetalk_source(source_dir):
+            logger.warning("Failed to download MuseTalk source code. Continuing with model download...")
+    else:
+        logger.info(f"MuseTalk source code found at {source_dir}")
 
     try:
-        # Hugging Face Hub를 통한 모델 다운로드 시도
+        # 2. Hugging Face Hub를 통한 모델 다운로드 시도
         try:
             from huggingface_hub import snapshot_download
 
@@ -222,24 +357,44 @@ def setup_lipsync(device: str = "cuda") -> bool:
                 ignore_patterns=["*.md", "*.txt", ".git*"],
             )
             logger.info(f"MuseTalk models downloaded to {model_dir}")
+            
+            # 소스 코드 확인 (모델만 있고 소스 코드가 없으면)
+            if not source_dir.exists() or not (source_dir / "musetalk").exists():
+                logger.info("Downloading MuseTalk source code as well...")
+                download_musetalk_source(source_dir)
+            
             return True
 
         except ImportError:
             logger.warning("huggingface_hub not installed. Trying alternative method...")
 
-        # 대안: MuseTalk 패키지 사용
+        # 대안: MuseTalk 패키지 사용 (소스 코드가 있으면)
         try:
-            from musetalk.models.unet import MuseTalkUNet
-            logger.info("MuseTalk package is installed")
+            # Python 경로에 추가
+            if str(source_dir.resolve()) not in sys.path:
+                sys.path.insert(0, str(source_dir.resolve()))
+            
+            from musetalk.models.unet import UNet
+            logger.info("MuseTalk package is available (source code found)")
+            
+            # 모델 파일이 없으면 경고
+            model_files = list(model_dir.glob("**/unet.pth")) + list(model_dir.glob("**/musetalk.json"))
+            if not model_files:
+                logger.warning(
+                    f"MuseTalk model files not found in {model_dir}. "
+                    f"Please download models manually or install huggingface_hub."
+                )
+            
             return True
         except ImportError:
             pass
 
         # 모델 디렉토리만 생성
         logger.warning(
-            f"MuseTalk model not downloaded. "
-            f"Install huggingface_hub: pip install huggingface_hub\n"
-            f"Or manually clone: git clone https://github.com/TMElyralab/MuseTalk"
+            f"MuseTalk setup incomplete.\n"
+            f"  - Source code: {'✓' if source_dir.exists() else '✗'}\n"
+            f"  - Model files: {'✓' if (model_dir / 'musetalkV15' / 'unet.pth').exists() else '✗'}\n"
+            f"  Install huggingface_hub: pip install huggingface_hub"
         )
         return False
 

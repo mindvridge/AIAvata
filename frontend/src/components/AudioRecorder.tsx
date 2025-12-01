@@ -84,7 +84,7 @@ export function AudioRecorder({
   }
 
   return (
-    <div className="flex flex-col items-center gap-3">
+    <div className="flex flex-col items-center gap-1.5 sm:gap-2">
       {/* Main button */}
       <div className="relative">
         {/* Level indicator ring */}

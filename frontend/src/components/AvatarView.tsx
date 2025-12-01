@@ -189,12 +189,12 @@ export function AvatarView({
   }, [useCanvas, isConnected, width, height]);
 
   return (
-    <div className="avatar-container relative" style={{ width, height }}>
+    <div className="avatar-container relative w-full h-full">
       {/* Video element (for LiveKit) */}
       {!useCanvas && (
         <video
           ref={videoRef}
-          className="avatar-video"
+          className="avatar-video w-full h-full"
           autoPlay
           playsInline
           muted
@@ -208,12 +208,11 @@ export function AvatarView({
           ref={canvasRef}
           width={width}
           height={height}
-          className="avatar-video"
+          className="avatar-video w-full h-full"
           style={{ 
             backgroundColor: '#111827',
             display: 'block',
-            width: `${width}px`,
-            height: `${height}px`,
+            objectFit: 'contain',
           }}
         />
       )}

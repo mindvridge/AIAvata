@@ -64,18 +64,18 @@ export function StatusBar({
   };
 
   return (
-    <div className="flex items-center justify-between px-4 py-2 bg-gray-800/50 rounded-lg">
+    <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-1 sm:gap-2 px-2 sm:px-3 py-1 sm:py-1.5 bg-gray-800/50 rounded-lg text-xs">
       {/* Left: Connection status */}
-      <div className="flex items-center gap-4">
-        <div className="flex items-center gap-2">
+      <div className="flex items-center gap-1.5 sm:gap-3 flex-wrap">
+        <div className="flex items-center gap-1.5">
           {isConnected ? (
-            <Wifi className="w-4 h-4 text-green-400" />
+            <Wifi className="w-3.5 h-3.5 text-green-400" />
           ) : (
-            <WifiOff className="w-4 h-4 text-gray-500" />
+            <WifiOff className="w-3.5 h-3.5 text-gray-500" />
           )}
           <span
             className={clsx(
-              'text-sm font-medium',
+              'text-xs font-medium',
               isConnected ? 'text-green-400' : 'text-gray-500'
             )}
           >
@@ -90,8 +90,8 @@ export function StatusBar({
         </div>
 
         {latency !== undefined && isConnected && (
-          <div className="flex items-center gap-1.5 text-sm text-gray-400">
-            <Clock className="w-3.5 h-3.5" />
+          <div className="flex items-center gap-1 text-xs text-gray-400">
+            <Clock className="w-3 h-3" />
             <span>{latency}ms</span>
           </div>
         )}
@@ -99,7 +99,7 @@ export function StatusBar({
 
       {/* Center: Server status */}
       {health && (
-        <div className="flex items-center gap-4">
+        <div className="flex items-center gap-1.5 sm:gap-3 flex-wrap">
           <div className="flex items-center gap-1.5">
             <div
               className={clsx(

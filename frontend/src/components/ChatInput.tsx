@@ -61,7 +61,7 @@ export function ChatInput({
   const canSend = message.trim().length > 0 && !isLoading && !isDisabled;
 
   return (
-    <div className="flex items-center gap-2 p-3 bg-gray-800/50 rounded-lg border border-gray-700">
+    <div className="flex items-center gap-1.5 sm:gap-2 p-2 sm:p-2.5 bg-gray-800/50 rounded-lg border border-gray-700">
       {/* 입력 필드 */}
       <input
         ref={inputRef}
@@ -69,20 +69,20 @@ export function ChatInput({
         value={message}
         onChange={handleChange}
         onKeyDown={handleKeyDown}
-        placeholder={isDisabled ? '연결 후 채팅할 수 있습니다' : placeholder}
+        placeholder={isDisabled ? '연결 후 채팅 가능' : placeholder}
         disabled={isDisabled || isLoading}
         className={clsx(
           'flex-1 bg-transparent border-none outline-none text-white placeholder-gray-500',
-          'text-sm py-2 px-3',
+          'text-xs sm:text-sm py-1 sm:py-1.5 px-2',
           isDisabled && 'cursor-not-allowed opacity-50'
         )}
         maxLength={maxLength}
       />
 
-      {/* 글자 수 표시 */}
+      {/* 글자 수 표시 - 작은 화면에서는 숨김 */}
       {message.length > 0 && (
         <span className={clsx(
-          'text-xs',
+          'text-xs hidden sm:inline',
           message.length > maxLength * 0.9 ? 'text-yellow-400' : 'text-gray-500'
         )}>
           {message.length}/{maxLength}
@@ -94,7 +94,7 @@ export function ChatInput({
         onClick={handleSend}
         disabled={!canSend}
         className={clsx(
-          'p-2 rounded-lg transition-all duration-200',
+          'p-1.5 sm:p-2 rounded-lg transition-all duration-200 flex-shrink-0',
           canSend
             ? 'bg-blue-600 hover:bg-blue-500 text-white cursor-pointer'
             : 'bg-gray-700 text-gray-500 cursor-not-allowed'
@@ -102,9 +102,9 @@ export function ChatInput({
         title={canSend ? '전송 (Enter)' : '메시지를 입력하세요'}
       >
         {isLoading ? (
-          <Loader2 className="w-5 h-5 animate-spin" />
+          <Loader2 className="w-4 h-4 sm:w-5 sm:h-5 animate-spin" />
         ) : (
-          <Send className="w-5 h-5" />
+          <Send className="w-4 h-4 sm:w-5 sm:h-5" />
         )}
       </button>
     </div>

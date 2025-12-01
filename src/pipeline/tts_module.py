@@ -124,20 +124,27 @@ class TTSModule:
 
         if self._chatterbox_model is None:
             # Mock audio for testing
-            logger.debug("Using mock TTS audio (model not loaded)")
+            logger.warning(f"⚠️ TTS model not loaded, using mock audio for text: '{text[:50]}...'")
             return self._generate_mock_audio(len(text))
 
         try:
             # Chatterbox TTS 추론
+            logger.info(f"🎙️ Calling Chatterbox TTS synthesize: text='{text[:50]}...', voice_id={use_voice_id}")
             audio = await self._chatterbox_model.synthesize(
                 text=text,
                 voice_id=use_voice_id,
             )
-
+            
+            if audio is not None and len(audio) > 0:
+                logger.info(f"✅ TTS synthesize completed: {len(audio)} samples")
+            else:
+                logger.warning(f"⚠️ TTS synthesize returned empty audio: {audio}")
+            
             return audio
 
         except Exception as e:
-            logger.error(f"TTS synthesis error: {e}")
+            logger.error(f"❌ TTS synthesis error: {e}", exc_info=True)
+            logger.warning(f"⚠️ Falling back to mock audio for text: '{text[:50]}...'")
             return self._generate_mock_audio(len(text))
 
     async def synthesize_stream(
@@ -298,9 +305,18 @@ class TTSModule:
 
     def _generate_mock_audio(self, text_length: int) -> np.ndarray:
         """테스트용 mock 오디오 생성"""
-        # 텍스트 길이에 비례한 무음 오디오
+        # 텍스트 길이에 비례한 무음 오디오 (테스트 신호 추가)
         duration_samples = int(text_length * 0.1 * self.sample_rate)
-        return np.zeros(duration_samples, dtype=np.float32)
+        if duration_samples == 0:
+            duration_samples = int(0.5 * self.sample_rate)  # 최소 0.5초
+        
+        # 무음 대신 테스트 신호(사인파) 생성 (파동이 보이도록)
+        t = np.linspace(0, duration_samples / self.sample_rate, duration_samples)
+        frequency = 440  # A4 음
+        audio = 0.3 * np.sin(2 * np.pi * frequency * t).astype(np.float32)
+        
+        logger.info(f"📢 Generated mock audio: {duration_samples} samples ({duration_samples/self.sample_rate:.2f}s)")
+        return audio
 
     async def cleanup(self) -> None:
         """리소스 정리"""

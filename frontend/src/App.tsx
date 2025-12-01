@@ -201,33 +201,35 @@ function App() {
   }, []);
 
   return (
-    <div className="min-h-screen bg-avatar-bg text-white">
+    <div className="h-screen bg-avatar-bg text-white flex flex-col overflow-hidden">
       {/* Header */}
-      <header className="border-b border-gray-800">
-        <div className="max-w-7xl mx-auto px-4 py-4">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-3">
-              <div className="w-10 h-10 rounded-full bg-gradient-to-br from-primary-400 to-primary-600 flex items-center justify-center">
-                <span className="text-xl">🤖</span>
+      <header className="border-b border-gray-800 flex-shrink-0">
+        <div className="max-w-[1920px] mx-auto px-2 sm:px-4 py-1.5 sm:py-2">
+          <div className="flex items-center justify-between flex-wrap gap-2">
+            <div className="flex items-center gap-2 sm:gap-3">
+              <div className="w-8 h-8 sm:w-10 sm:h-10 rounded-full bg-gradient-to-br from-primary-400 to-primary-600 flex items-center justify-center flex-shrink-0">
+                <span className="text-base sm:text-xl">🤖</span>
               </div>
               <div>
-                <h1 className="text-xl font-bold">AI Avatar</h1>
-                <p className="text-xs text-gray-500">실시간 대화형 AI 아바타</p>
+                <h1 className="text-base sm:text-xl font-bold">AI Avatar</h1>
+                <p className="text-xs text-gray-500 hidden sm:block">실시간 대화형 AI 아바타</p>
               </div>
             </div>
 
-            <div className="flex items-center gap-4">
+            <div className="flex items-center gap-2 sm:gap-4">
               <button
                 onClick={() => setShowConversation(!showConversation)}
-                className="px-3 py-1.5 text-sm bg-gray-700 hover:bg-gray-600 rounded-lg transition-colors"
+                className="px-2 sm:px-3 py-1 sm:py-1.5 text-xs sm:text-sm bg-gray-700 hover:bg-gray-600 rounded-lg transition-colors"
               >
-                {showConversation ? '대화 숨기기' : '대화 보기'}
+                <span className="hidden sm:inline">{showConversation ? '대화 숨기기' : '대화 보기'}</span>
+                <span className="sm:hidden">{showConversation ? '숨기기' : '대화'}</span>
               </button>
               <button
                 onClick={() => setShowErrorLog(!showErrorLog)}
-                className="relative px-3 py-1.5 text-sm bg-gray-700 hover:bg-gray-600 rounded-lg transition-colors flex items-center gap-2"
+                className="relative px-2 sm:px-3 py-1 sm:py-1.5 text-xs sm:text-sm bg-gray-700 hover:bg-gray-600 rounded-lg transition-colors flex items-center gap-2"
               >
-                <span>에러 로그</span>
+                <span className="hidden sm:inline">에러 로그</span>
+                <span className="sm:hidden">로그</span>
                 {(errorCount > 0 || warningCount > 0) && (
                   <span className="absolute -top-1 -right-1 w-5 h-5 bg-red-500 text-white text-xs rounded-full flex items-center justify-center">
                     {errorCount + warningCount}
@@ -239,68 +241,70 @@ function App() {
         </div>
       </header>
 
-      {/* Main content */}
-      <main className="max-w-7xl mx-auto px-4 py-8">
-        <div className="flex gap-6">
-          {/* Avatar section */}
-          <div className="flex-1 flex flex-col items-center gap-6">
+      {/* Main content - flex로 공간 최적화, 스크롤 없음 */}
+      <main className="flex-1 overflow-hidden max-w-[1920px] mx-auto w-full px-2 sm:px-4 py-1 sm:py-2 min-h-0">
+        <div className="flex flex-col lg:flex-row gap-2 sm:gap-3 h-full">
+          {/* Avatar section - 컴팩트하게 배치, 공간 균등 분배 */}
+          <div className="flex-1 flex flex-col items-center gap-1 sm:gap-1.5 lg:gap-2 min-w-0 min-h-0 justify-center">
             {/* Status bar */}
-            <div className="w-full max-w-lg">
+            <div className="w-full max-w-full sm:max-w-lg flex-shrink-0">
               <StatusBar
                 connectionState={connectionState}
                 showMetrics={isConnected}
               />
             </div>
 
-            {/* Avatar view */}
-            <div className="relative">
-              <AvatarView
-                emotion={emotion}
-                pipelineState={pipelineState}
-                isConnected={isConnected}
-                isLoading={connectionState === 'connecting' || isConnecting}
-                frameData={frameData}
-                width={512}
-                height={512}
-              />
+            {/* Avatar view - 화면에 맞게 크기 조정, 남은 공간 활용 */}
+            <div className="relative w-full max-w-full sm:max-w-md lg:max-w-lg flex-[2] min-h-0 flex items-center justify-center">
+              <div className="w-full h-full max-h-full aspect-square max-w-full">
+                <AvatarView
+                  emotion={emotion}
+                  pipelineState={pipelineState}
+                  isConnected={isConnected}
+                  isLoading={connectionState === 'connecting' || isConnecting}
+                  frameData={frameData}
+                  width={512}
+                  height={512}
+                />
+              </div>
             </div>
 
-            {/* Audio waveform - 아바타 음성 파동 그래프 */}
-            <div className="w-full max-w-lg">
+            {/* Audio waveform - 작게 */}
+            <div className="w-full max-w-full sm:max-w-lg flex-shrink-0">
               <AudioWaveform
                 audioData={audioData}
                 audioLevel={audioLevel}
                 width={512}
-                height={80}
+                height={60}
                 barColor="#3b82f6"
                 backgroundColor="#1f2937"
-                showLevel={true}
+                showLevel={false}
                 isActive={pipelineState === 'speaking' || pipelineState === 'processing'}
               />
             </div>
 
-            {/* Audio recorder */}
-            <div className="mt-4">
+            {/* Audio recorder - 작게 */}
+            <div className="w-full max-w-full sm:max-w-lg flex-shrink-0">
               <AudioRecorder
                 onAudioData={handleAudioData}
                 isEnabled={isConnected && !isMuted}
-                size="lg"
-                showLevel={true}
+                size="md"
+                showLevel={false}
               />
             </div>
 
-            {/* Chat input */}
-            <div className="w-full max-w-lg mt-4">
+            {/* Chat input - 작게 */}
+            <div className="w-full max-w-full sm:max-w-lg flex-shrink-0">
               <ChatInput
                 onSend={handleChatSend}
                 isLoading={isChatLoading}
                 isDisabled={!isConnected}
-                placeholder="메시지를 입력하세요... (Enter로 전송)"
+                placeholder="메시지 입력... (Enter)"
               />
             </div>
 
-            {/* Controls */}
-            <div className="w-full max-w-lg mt-4">
+            {/* Controls - 컴팩트 */}
+            <div className="w-full max-w-full sm:max-w-lg flex-shrink-0">
               <Controls
                 connectionState={connectionState}
                 pipelineState={pipelineState}
@@ -317,15 +321,15 @@ function App() {
 
             {/* Error message */}
             {error && (
-              <div className="w-full max-w-lg mt-4 p-4 bg-red-500/20 border border-red-500/50 rounded-lg">
-                <p className="text-red-400 text-sm">{error}</p>
+              <div className="w-full max-w-full sm:max-w-lg p-2 sm:p-3 bg-red-500/20 border border-red-500/50 rounded-lg flex-shrink-0">
+                <p className="text-red-400 text-xs">{error}</p>
               </div>
             )}
           </div>
 
-          {/* Conversation panel */}
+          {/* Conversation panel - 전체 높이 사용 */}
           {showConversation && (
-            <div className="w-96 h-[700px]">
+            <div className="w-full lg:w-80 xl:w-96 flex-shrink-0 h-full min-h-0">
               <ConversationPanel
                 messages={messages}
                 isLoading={pipelineState === 'processing'}
@@ -336,14 +340,14 @@ function App() {
         </div>
       </main>
 
-      {/* Footer */}
-      <footer className="border-t border-gray-800 mt-auto">
-        <div className="max-w-7xl mx-auto px-4 py-4">
-          <div className="flex items-center justify-between text-xs text-gray-500">
-            <p>Realtime AI Avatar Service v1.0.0</p>
-            <div className="flex items-center gap-4">
-              <span>한국어 지원</span>
-              <span>MIT License</span>
+      {/* Footer - 최소화 */}
+      <footer className="border-t border-gray-800 flex-shrink-0">
+        <div className="max-w-[1920px] mx-auto px-2 sm:px-4 py-1">
+          <div className="flex items-center justify-between text-xs text-gray-500 flex-wrap gap-1">
+            <p className="text-xs truncate">AI Avatar v1.0.0</p>
+            <div className="flex items-center gap-2 text-xs">
+              <span className="hidden sm:inline">한국어</span>
+              <span className="hidden md:inline">MIT</span>
             </div>
           </div>
         </div>

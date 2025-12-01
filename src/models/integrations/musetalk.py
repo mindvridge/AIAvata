@@ -64,6 +64,12 @@ class MuseTalkModel:
         self._vae = None
         self._face_parser = None
         self._positional_encoding = None  # PositionalEncoding for audio features
+        self._whisper = None  # Whisper encoder 모델
+        self._weight_dtype = None  # 모델 dtype (float16/float32)
+
+        # 오디오 버퍼 (실시간 처리용)
+        self._audio_buffer: List[np.ndarray] = []
+        self._audio_buffer_size = 16000 * 2  # 2초 버퍼 (16kHz)
 
         # 캐시
         self._face_cache: Dict[str, Any] = {}
@@ -156,9 +162,49 @@ class MuseTalkModel:
                         # PositionalEncoding 초기화 (오디오 특징용)
                         from musetalk.models.unet import PositionalEncoding
                         self._positional_encoding = PositionalEncoding(d_model=384)
-                        if self._unet.device:
-                            self._positional_encoding.to(self._unet.device)
+                        device_obj = torch.device(self.device if torch.cuda.is_available() else "cpu")
+                        if self.fp16:
+                            self._positional_encoding = self._positional_encoding.half()
+                        self._positional_encoding.to(device_obj)
                         logger.info("PositionalEncoding initialized")
+                        
+                        # Weight dtype 설정
+                        self._weight_dtype = torch.float16 if self.fp16 else torch.float32
+                        
+                        # Whisper 모델 초기화 (실시간 오디오 특징 추출용)
+                        try:
+                            from transformers import WhisperModel
+                            whisper_model_path = "openai/whisper-tiny"
+                            
+                            # 여러 경로 시도
+                            whisper_paths = [
+                                Path("models/whisper"),
+                                Path("external/MuseTalk/models/whisper"),
+                                "openai/whisper-tiny",  # HuggingFace에서 자동 다운로드
+                            ]
+                            
+                            whisper_path = None
+                            for wp in whisper_paths:
+                                if isinstance(wp, str):
+                                    # HuggingFace 모델 ID
+                                    whisper_path = wp
+                                    break
+                                elif wp.exists():
+                                    whisper_path = str(wp)
+                                    break
+                            
+                            if whisper_path:
+                                logger.info(f"Loading Whisper model from: {whisper_path}")
+                                self._whisper = WhisperModel.from_pretrained(whisper_path)
+                                self._whisper = self._whisper.to(device=device_obj, dtype=self._weight_dtype).eval()
+                                self._whisper.requires_grad_(False)
+                                logger.info("Whisper model loaded successfully")
+                            else:
+                                logger.warning("Whisper model path not found, using feature_extractor only")
+                                self._whisper = None
+                        except Exception as e:
+                            logger.warning(f"Failed to load Whisper model: {e}. Using feature_extractor only.")
+                            self._whisper = None
                         
                         # VAE 모델 로드 (SD-VAE)
                         # 여러 경로 시도
@@ -270,66 +316,108 @@ class MuseTalkModel:
             
             # VAE로 얼굴 이미지를 latent로 인코딩
             # get_latents_for_unet은 이미지 경로나 numpy array를 받을 수 있음
+            device_obj = torch.device(self.device if torch.cuda.is_available() else "cpu")
             latent_input = self._vae.get_latents_for_unet(face_crop)
-            latent_input = latent_input.to(self.device)
-            if self.fp16:
-                latent_input = latent_input.half()
-
-            # 오디오 특징에 PositionalEncoding 적용
-            # 실제 MuseTalk에서는 Whisper encoder를 통해 처리되지만,
-            # 실시간 처리를 위해 간단한 형태로 변환
-            if self._positional_encoding:
-                # audio_features는 [batch, seq_len, features] 형태여야 함
-                # 현재는 [batch, features, seq_len] 또는 다른 형태일 수 있음
-                logger.debug(f"Audio features before PE: shape={audio_features.shape}")
-                
-                # 형태 변환: [batch, seq_len, features] 형태로 맞춤
-                if len(audio_features.shape) == 2:
-                    audio_features = audio_features.unsqueeze(0)  # [1, seq_len, features]
-                elif len(audio_features.shape) == 4:  # [batch, channels, height, width]
-                    # Whisper feature extractor 출력 형태
-                    b, c, h, w = audio_features.shape
-                    audio_features = audio_features.view(b, h, c * w)  # [batch, seq_len, features]
-                
-                # PositionalEncoding 적용
-                audio_features = self._positional_encoding(audio_features)
-                logger.debug(f"Audio features after PE: shape={audio_features.shape}")
-                
-                # 형태 변환: UNet이 기대하는 형태로 변환
-                # UNet은 [batch, seq_len, features] 형태를 기대하지만,
-                # 실제로는 [batch, seq_len, hidden_dim] 형태여야 함
-                # MuseTalk에서는 Whisper encoder의 hidden states를 사용
-                # 여기서는 간단하게 형태를 맞춤
-                if len(audio_features.shape) == 3:
-                    # [batch, seq_len, features] 형태 유지
-                    pass
-                else:
-                    logger.warning(f"Unexpected audio features shape: {audio_features.shape}")
-                    # 형태 조정 시도
-                    if len(audio_features.shape) == 2:
-                        audio_features = audio_features.unsqueeze(0)
+            latent_input = latent_input.to(device_obj)
+            if self._weight_dtype:
+                latent_input = latent_input.to(dtype=self._weight_dtype)
             else:
-                logger.warning("PositionalEncoding not available, skipping")
+                if self.fp16:
+                    latent_input = latent_input.half()
 
-            # 추론
-            with torch.no_grad():
-                # UNet 추론 (실제 MuseTalk 방식)
-                timesteps = torch.tensor([0], device=self.device)
+            # 오디오 특징 처리 (MuseTalk 방식)
+            device_obj = torch.device(self.device if torch.cuda.is_available() else "cpu")
+            timesteps = torch.tensor([0], device=device_obj)
+            
+            # audio_features 형태에 따라 처리
+            logger.debug(f"Audio features shape before processing: {audio_features.shape}")
+            
+            # MuseTalk의 get_whisper_chunk 결과는 [T, (c h) w] 형태
+            # 여기서는 실시간으로 [1, seq_len, features] 형태가 나오는데
+            # 이를 MuseTalk의 형식인 [batch, (c h) w]로 변환해야 함
+            
+            # audio_features가 [batch, features] 형태인 경우
+            if len(audio_features.shape) == 2:
+                # [batch, features] -> [batch, 1, features] -> [batch, (1) features]
+                # MuseTalk에서는 여러 프레임의 오디오를 쌓지만, 실시간에서는 1프레임씩
+                # PositionalEncoding을 위해 [batch, seq_len, features] 형태로 변환
+                if audio_features.shape[1] == 384:  # 단일 feature vector
+                    # [batch, 384] -> [batch, 1, 384]
+                    audio_features = audio_features.unsqueeze(1)
+                else:
+                    # 이미 올바른 형태
+                    pass
+            elif len(audio_features.shape) == 3:
+                # [batch, seq_len, features] 형태
+                pass
+            elif len(audio_features.shape) == 4:
+                # [batch, channels, height, width] -> [batch, (c h) w] (MuseTalk 형식)
+                from einops import rearrange
+                audio_features = rearrange(audio_features, 'b c h w -> b (c h) w')
+            
+            # PositionalEncoding 적용 (MuseTalk 방식)
+            # MuseTalk의 get_whisper_chunk 결과는 [batch, (c h) w] 형태
+            # PositionalEncoding은 [batch, seq_len, d_model] 형태를 기대
+            if self._positional_encoding:
+                # audio_features 형태에 따라 처리
+                if len(audio_features.shape) == 2:
+                    # [batch, features] -> [batch, 1, features]
+                    audio_features = audio_features.unsqueeze(1)
                 
-                # UNet 호출 방식: latent_input과 audio_features 결합
-                # audio_features는 [batch, seq_len, hidden_dim] 형태여야 함
+                # MuseTalk에서는 [batch, (c h) w] 형태인데, 이것을 PositionalEncoding에 전달
+                # PositionalEncoding은 [batch, seq_len, d_model] 형태를 기대
+                # 여기서 seq_len은 (c h)이고, d_model은 w (384)
+                if len(audio_features.shape) == 3:
+                    # [batch, seq_len, features] 형태
+                    # PositionalEncoding 적용
+                    audio_features = self._positional_encoding(audio_features.to(device_obj))
+                    logger.debug(f"Audio features after PE: shape={audio_features.shape}")
+                elif len(audio_features.shape) == 2:
+                    # [batch, features] 형태 -> [batch, 1, features]
+                    audio_features = audio_features.unsqueeze(1)
+                    audio_features = self._positional_encoding(audio_features.to(device_obj))
+                    logger.debug(f"Audio features after PE: shape={audio_features.shape}")
+            
+            # UNet 추론 (실제 MuseTalk 방식)
+            with torch.no_grad():
+                # latent_input 준비
+                if latent_input.dtype != self._unet.model.dtype:
+                    latent_input = latent_input.to(dtype=self._unet.model.dtype)
+                
+                # audio_features를 device로 이동
+                audio_features = audio_features.to(device_obj)
+                if self._weight_dtype:
+                    audio_features = audio_features.to(dtype=self._weight_dtype)
+                
+                # UNet의 encoder_hidden_states는 [batch, seq_len, hidden_dim] 형태
+                # MuseTalk에서는 get_whisper_chunk 결과가 [batch, (c h) w] 형태인데
+                # 이것이 PositionalEncoding을 거쳐서 [batch, seq_len, features]가 됨
+                # 실시간에서는 [batch, 1, features] 형태를 사용
+                
                 logger.debug(f"UNet input - latent_input: {latent_input.shape}, audio_features: {audio_features.shape}")
                 
                 try:
-                    pred_latents = self._unet.model(
+                    # UNet 추론 (MuseTalk realtime_inference.py 방식)
+                    # UNet2DConditionModel은 BaseOutput 객체를 반환하며 .sample 속성을 가짐
+                    unet_output = self._unet.model(
                         latent_input,
                         timesteps,
                         encoder_hidden_states=audio_features
-                    ).sample
+                    )
+                    
+                    # .sample 속성 접근 (UNet2DConditionModel의 반환값)
+                    pred_latents = unet_output.sample
+                    
                     logger.debug(f"UNet output: {pred_latents.shape}")
                 except Exception as e:
                     logger.error(f"UNet inference failed: {e}", exc_info=True)
-                    raise
+                    logger.error(f"Error details - latent_input shape: {latent_input.shape}, dtype: {latent_input.dtype}")
+                    logger.error(f"Error details - audio_features shape: {audio_features.shape}, dtype: {audio_features.dtype}")
+                    logger.error(f"Error details - timesteps: {timesteps}")
+                    import traceback
+                    logger.error(f"Traceback: {traceback.format_exc()}")
+                    # 오류 발생 시 원본 프레임 반환
+                    return source_frame
                 
                 # VAE 디코딩
                 pred_latents = pred_latents.to(dtype=self._vae.vae.dtype)
@@ -345,26 +433,70 @@ class MuseTalkModel:
 
             # 후처리: VAE 출력은 BGR 이미지이므로 그대로 사용
             # output은 numpy array [H, W, 3] 형태
-            if isinstance(output, torch.Tensor):
-                output_np = output.detach().cpu().numpy()
-                if len(output_np.shape) == 4:  # [batch, H, W, C]
-                    output_np = output_np[0]  # 첫 번째만
-                elif len(output_np.shape) == 3 and output_np.shape[0] == 3:  # [C, H, W]
-                    output_np = output_np.transpose(1, 2, 0)  # [H, W, C]
-                
-                # 0-1 범위를 0-255로 변환
-                if output_np.max() <= 1.0:
-                    output_np = (output_np * 255).clip(0, 255).astype(np.uint8)
+            output_np = None
+            try:
+                if isinstance(output, torch.Tensor):
+                    output_np = output.detach().cpu().numpy()
+                    if len(output_np.shape) == 4:  # [batch, H, W, C]
+                        output_np = output_np[0]  # 첫 번째만
+                    elif len(output_np.shape) == 3 and output_np.shape[0] == 3:  # [C, H, W]
+                        output_np = output_np.transpose(1, 2, 0)  # [H, W, C]
+                    
+                    # 0-1 범위를 0-255로 변환
+                    if output_np.max() <= 1.0:
+                        output_np = (output_np * 255).clip(0, 255).astype(np.uint8)
+                    else:
+                        output_np = output_np.clip(0, 255).astype(np.uint8)
+                elif isinstance(output, np.ndarray):
+                    output_np = output.copy()
+                    # 0-1 범위를 0-255로 변환
+                    if output_np.max() <= 1.0:
+                        output_np = (output_np * 255).clip(0, 255).astype(np.uint8)
+                    elif output_np.dtype != np.uint8:
+                        output_np = output_np.clip(0, 255).astype(np.uint8)
                 else:
-                    output_np = output_np.clip(0, 255).astype(np.uint8)
-            else:
-                output_np = output
+                    logger.warning(f"Unexpected output type: {type(output)}, returning source frame")
+                    return source_frame
+                    
+                # 출력 형태 검증
+                if output_np is None or output_np.size == 0:
+                    logger.warning("VAE output is None or empty after processing, returning source frame")
+                    return source_frame
+                    
+            except Exception as e:
+                logger.error(f"VAE output post-processing failed: {e}", exc_info=True)
+                return source_frame
             
             # 원본 크기로 리사이즈
             h, w = source_frame.shape[:2]
-            result_frame = cv2.resize(output_np, (w, h))
             
-            return result_frame
+            # output_np 유효성 검사
+            if output_np is None or output_np.size == 0:
+                logger.warning("VAE output is None or empty, returning source frame")
+                return source_frame
+            
+            # output_np 형태 검사 및 정규화
+            if len(output_np.shape) < 2:
+                logger.warning(f"Invalid output_np shape (too few dimensions): {output_np.shape}, returning source frame")
+                return source_frame
+            
+            # 높이와 너비 확인
+            output_h, output_w = output_np.shape[:2]
+            if output_h <= 0 or output_w <= 0:
+                logger.warning(f"Invalid output_np dimensions: h={output_h}, w={output_w}, returning source frame")
+                return source_frame
+            
+            # 리사이즈 시도
+            try:
+                result_frame = cv2.resize(output_np, (w, h), interpolation=cv2.INTER_LINEAR)
+                if result_frame is not None and result_frame.shape[:2] == (h, w):
+                    return result_frame
+                else:
+                    logger.warning(f"Resize result invalid: {result_frame.shape if result_frame is not None else None}, returning source frame")
+                    return source_frame
+            except Exception as e:
+                logger.error(f"OpenCV resize failed: {e}, output_np shape: {output_np.shape}, target size: ({w}, {h}), returning source frame")
+                return source_frame
 
         except Exception as e:
             logger.error(f"MuseTalk inference error: {e}", exc_info=True)
@@ -378,39 +510,117 @@ class MuseTalkModel:
         audio: np.ndarray,
         sample_rate: int,
     ) -> "torch.Tensor":
-        """오디오에서 특징 추출 (실제 MuseTalk AudioProcessor 사용)"""
+        """
+        오디오에서 특징 추출 (MuseTalk 방식: Whisper encoder 사용)
+        
+        Args:
+            audio: 오디오 배열 (float32, [-1, 1])
+            sample_rate: 오디오 샘플레이트
+            
+        Returns:
+            Whisper encoder hidden states (torch.Tensor)
+        """
         import torch
 
-        if self._audio_processor is not None:
-            try:
-                # AudioProcessor의 feature_extractor를 직접 사용
-                # 실시간 오디오 청크를 처리하기 위해 librosa로 리샘플링 후 추출
-                import librosa
-                
-                # 16000 Hz로 리샘플링 (MuseTalk 요구사항)
-                if sample_rate != 16000:
-                    audio = librosa.resample(audio, orig_sr=sample_rate, target_sr=16000)
-                
-                # feature_extractor 사용 (Whisper feature extractor)
-                audio_feature = self._audio_processor.feature_extractor(
-                    audio,
-                    return_tensors="pt",
-                    sampling_rate=16000
-                ).input_features
-                
-                # 디바이스로 이동
-                audio_feature = audio_feature.to(self.device)
-                if self.fp16:
-                    audio_feature = audio_feature.half()
-                
+        if self._audio_processor is None:
+            # 폴백: 간단한 특징 추출
+            features = self._simple_audio_features(audio, sample_rate)
+            return torch.from_numpy(features).to(self.device).unsqueeze(0)
+
+        try:
+            import librosa
+            
+            # 16000 Hz로 리샘플링 (MuseTalk 요구사항)
+            if sample_rate != 16000:
+                audio = librosa.resample(audio, orig_sr=sample_rate, target_sr=16000)
+            
+            # 실시간 처리를 위한 오디오 버퍼링
+            # MuseTalk은 여러 프레임의 오디오를 함께 처리하므로, 버퍼 유지 필요
+            self._audio_buffer.append(audio.copy())
+            
+            # 버퍼 크기 제한 (메모리 관리)
+            total_length = sum(len(chunk) for chunk in self._audio_buffer)
+            while total_length > self._audio_buffer_size:
+                if len(self._audio_buffer) > 0:
+                    removed = self._audio_buffer.pop(0)
+                    total_length -= len(removed)
+            
+            # 버퍼 결합 (최근 오디오들 사용)
+            if len(self._audio_buffer) > 1:
+                audio_combined = np.concatenate(self._audio_buffer)
+            else:
+                audio_combined = audio
+            
+            # 최소 길이 보장 (Whisper 요구사항)
+            min_length = 16000 * 0.5  # 최소 0.5초
+            if len(audio_combined) < min_length:
+                # 패딩 추가
+                padding_length = int(min_length - len(audio_combined))
+                audio_combined = np.pad(audio_combined, (0, padding_length), mode='constant', constant_values=0)
+            
+            # Whisper feature extractor로 mel spectrogram 추출
+            device_obj = torch.device(self.device if torch.cuda.is_available() else "cpu")
+            audio_feature = self._audio_processor.feature_extractor(
+                audio_combined,
+                return_tensors="pt",
+                sampling_rate=16000
+            ).input_features
+            
+            audio_feature = audio_feature.to(device_obj)
+            if self._weight_dtype:
+                audio_feature = audio_feature.to(dtype=self._weight_dtype)
+            
+            # Whisper encoder로 hidden states 추출 (실제 MuseTalk 방식)
+            if self._whisper is not None:
+                with torch.no_grad():
+                    audio_feats = self._whisper.encoder(
+                        audio_feature, 
+                        output_hidden_states=True
+                    ).hidden_states
+                    
+                    # 모든 레이어의 hidden states를 스택 (MuseTalk 방식)
+                    audio_feats = torch.stack(audio_feats, dim=2)  # [batch, seq_len, num_layers, hidden_dim]
+                    
+                    # MuseTalk 형식으로 변환
+                    # get_whisper_chunk에서는 더 복잡한 처리를 하지만,
+                    # 실시간 처리를 위해 간단히 처리
+                    b, seq_len, num_layers, hidden_dim = audio_feats.shape
+                    
+                    # 실시간 처리: 마지막 타임스텝만 사용하거나 평균 사용
+                    if seq_len > 1:
+                        # 여러 타임스텝이 있으면 평균 사용
+                        audio_feats = audio_feats.mean(dim=1, keepdim=True)  # [batch, 1, num_layers, hidden_dim]
+                    
+                    # 형태 조정: [batch, 1, num_layers, hidden_dim] -> [batch, num_layers, hidden_dim]
+                    audio_feats = audio_feats.squeeze(1)  # [batch, num_layers, hidden_dim]
+                    
+                    # MuseTalk 방식: 모든 레이어의 hidden states를 스택
+                    # [batch, seq_len, num_layers, hidden_dim]
+                    # MuseTalk의 get_whisper_chunk에서는 이 형태를 [batch, (c h) w]로 변환
+                    # 여기서는 실시간 처리를 위해 간단화
+                    # 실제로는 여러 프레임의 오디오를 버퍼링하여 처리해야 하지만,
+                    # 여기서는 마지막 레이어의 hidden state만 사용 (384 차원)
+                    # 또는 모든 레이어의 평균 사용
+                    
+                    # 마지막 레이어만 사용 (hidden_dim = 384)
+                    audio_feats_last = audio_feats[:, -1, :]  # [batch, hidden_dim]
+                    
+                    # 또는 모든 레이어의 평균 사용
+                    # audio_feats_last = audio_feats.mean(dim=1)  # [batch, hidden_dim]
+                    
+                    # PositionalEncoding을 위한 형태: [batch, 1, hidden_dim]
+                    audio_feats_last = audio_feats_last.unsqueeze(1)  # [batch, 1, 384]
+                    
+                    return audio_feats_last
+            else:
+                # Whisper 없으면 feature_extractor 출력만 사용
                 return audio_feature
-            except Exception as e:
-                logger.warning(f"AudioProcessor feature extraction failed: {e}, using fallback")
-                # 폴백: 간단한 특징 추출
-                features = self._simple_audio_features(audio, sample_rate)
-                return torch.from_numpy(features).to(self.device).unsqueeze(0)
-        else:
-            # 간단한 MFCC 추출
+                
+        except Exception as e:
+            logger.warning(f"Audio feature extraction failed: {e}, using fallback")
+            import traceback
+            logger.debug(traceback.format_exc())
+            # 폴백: 간단한 특징 추출
             features = self._simple_audio_features(audio, sample_rate)
             return torch.from_numpy(features).to(self.device).unsqueeze(0)
 
@@ -588,9 +798,16 @@ class MuseTalkModel:
 
     async def cleanup(self) -> None:
         """리소스 정리"""
+        # 오디오 버퍼 초기화
+        self._audio_buffer.clear()
+        
+        # 모델 메모리 해제
         self._unet = None
         self._vae = None
         self._audio_processor = None
+        self._whisper = None
+        self._positional_encoding = None
+        self._face_parser = None
         self._face_cache.clear()
         self._initialized = False
 
@@ -605,6 +822,11 @@ class MuseTalkModel:
             pass
 
         logger.info("MuseTalk model cleaned up")
+    
+    def reset_audio_buffer(self) -> None:
+        """오디오 버퍼 초기화 (새 세션 시작 시 호출)"""
+        self._audio_buffer.clear()
+        logger.debug("Audio buffer reset")
 
 
 class FallbackAudioProcessor:

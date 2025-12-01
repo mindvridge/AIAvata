@@ -66,6 +66,8 @@ class AvatarWebSocketHandler:
             "websocket": websocket,
             "session_id": uuid_session,
             "is_streaming": False,
+            "idle_task": None,
+            "processing_audio": False,
         }
 
         try:
@@ -76,22 +78,29 @@ class AvatarWebSocketHandler:
             idle_task = asyncio.create_task(
                 self._start_idle_stream_background(websocket, uuid_session, connection_id)
             )
+            self._active_connections[connection_id]["idle_task"] = idle_task
 
             # 메시지 수신 루프
             while True:
                 message = await websocket.receive()
+                
+                logger.debug(f"📥 Raw message received: type={message.get('type')}, keys={list(message.keys())}")
 
                 if message["type"] == "websocket.receive":
                     if "bytes" in message:
                         # 오디오 데이터 처리
+                        logger.debug(f"🎤 Received audio bytes: {len(message['bytes'])} bytes")
                         await self._handle_audio(
                             websocket, message["bytes"], uuid_session
                         )
                     elif "text" in message:
                         # 제어 메시지 처리
+                        logger.debug(f"📝 Received text message: {message['text'][:100]}...")
                         await self._handle_control(
                             websocket, message["text"], uuid_session
                         )
+                    else:
+                        logger.warning(f"⚠️ Unknown message format: {message}")
 
         except WebSocketDisconnect:
             logger.info(f"WebSocket disconnected: {connection_id}")
@@ -177,8 +186,11 @@ class AvatarWebSocketHandler:
             session_id: 세션 ID
         """
         try:
+            logger.debug(f"📨 Received control message: {message_text[:100]}...")
             message = json.loads(message_text)
             msg_type = message.get("type")
+            
+            logger.info(f"📩 Processing control message type: {msg_type}")
 
             if msg_type == "ping":
                 # Ping/Pong
@@ -204,10 +216,15 @@ class AvatarWebSocketHandler:
             elif msg_type == "chat":
                 # 텍스트 채팅 메시지 처리
                 text = message.get("text", "")
+                logger.info(f"💬 Chat message received in _handle_control: '{text[:50]}...'")
                 if text:
+                    logger.info(f"🚀 Calling _handle_chat with text: '{text[:50]}...'")
                     await self._handle_chat(websocket, text, session_id)
+                else:
+                    logger.warning("⚠️ Chat message text is empty!")
 
             else:
+                logger.warning(f"⚠️ Unknown message type: {msg_type}, message: {message}")
                 await self._send_error(websocket, f"Unknown message type: {msg_type}")
 
         except json.JSONDecodeError:
@@ -250,8 +267,9 @@ class AvatarWebSocketHandler:
         if connection is None:
             return
 
-        # 이미 스트리밍 중이면 건너뛰기
-        if connection.get("is_streaming"):
+        # 이미 스트리밍 중이거나 오디오 처리 중이면 건너뛰기
+        if connection.get("is_streaming") or connection.get("processing_audio"):
+            logger.debug(f"Idle stream skipped: is_streaming={connection.get('is_streaming')}, processing_audio={connection.get('processing_audio')}")
             return
 
         connection["is_streaming"] = True
@@ -269,9 +287,10 @@ class AvatarWebSocketHandler:
                 if connection_id not in self._active_connections:
                     logger.info(f"Connection {connection_id} closed, stopping idle stream")
                     break
-
+                
                 # 오디오 처리 중이면 idle 프레임 건너뛰기
-                if self._active_connections[connection_id].get("processing_audio"):
+                connection_check = self._active_connections.get(connection_id)
+                if connection_check and connection_check.get("processing_audio"):
                     continue
 
                 try:
@@ -383,10 +402,12 @@ class AvatarWebSocketHandler:
             })
 
             # TTS로 음성 생성 및 립싱크 아바타 렌더링
+            logger.info("🎤 Starting TTS and lip sync processing for chat response...")
             try:
                 await self._process_chat_with_tts(websocket, response_text, session_id)
+                logger.info("✅ TTS and lip sync processing completed successfully")
             except Exception as e:
-                logger.warning(f"TTS/Lipsync processing failed (non-critical): {e}")
+                logger.error(f"❌ TTS/Lipsync processing failed: {e}", exc_info=True)
                 # TTS 실패해도 텍스트 응답은 이미 전송했으므로 계속 진행
 
         except Exception as e:
@@ -415,37 +436,66 @@ class AvatarWebSocketHandler:
         connection = self._active_connections.get(connection_id)
 
         if connection is None:
+            logger.error("❌ Connection not found, cannot process TTS")
             return
 
-        # 이미 처리 중이면 건너뛰기
+        logger.info(f"📝 Processing TTS for response: '{response_text[:50]}...'")
+        
+        # idle 스트림 중지 (채팅 처리 시작 전)
+        if connection.get("idle_task"):
+            idle_task = connection["idle_task"]
+            if idle_task and not idle_task.done():
+                logger.info("⏸️ Stopping idle stream for chat processing...")
+                idle_task.cancel()
+                try:
+                    await asyncio.wait_for(idle_task, timeout=1.0)
+                except (asyncio.CancelledError, asyncio.TimeoutError):
+                    pass
+                connection["idle_task"] = None
+        
+        # idle 스트림이 is_streaming을 False로 설정할 때까지 대기
         if connection.get("is_streaming"):
-            return
+            logger.info("⏳ Waiting for idle stream to stop...")
+            for _ in range(10):  # 최대 1초 대기
+                await asyncio.sleep(0.1)
+                if not connection.get("is_streaming"):
+                    break
+            if connection.get("is_streaming"):
+                logger.warning("⚠️ Still streaming, forcing stop for chat processing")
+                connection["is_streaming"] = False
 
         connection["is_streaming"] = True
         connection["processing_audio"] = True
+        logger.info("🎤 Starting chat TTS and lip sync processing...")
 
         try:
-            logger.info("Generating TTS audio for chat response...")
+            logger.info(f"🔊 Generating TTS audio for chat response: '{response_text[:50]}...'")
 
             # TTS로 음성 생성 (numpy array 반환)
-            audio_data_np = await self.pipeline.tts.generate(
+            audio_data_np = await self.pipeline.tts.synthesize(
                 text=response_text,
                 voice_id=None,  # 기본 음성 사용
             )
+            
+            logger.info(f"🎵 TTS generation result: audio_data_np={audio_data_np is not None}, length={len(audio_data_np) if audio_data_np is not None else 0}")
 
             if audio_data_np is not None and len(audio_data_np) > 0:
                 # numpy array를 bytes로 변환 (16-bit PCM)
                 audio_data_bytes = self.pipeline.tts._audio_to_bytes(audio_data_np)
-                logger.info(f"TTS audio generated: {len(audio_data_np)} samples ({len(audio_data_bytes)} bytes)")
+                logger.info(f"🔊 TTS audio generated: {len(audio_data_np)} samples ({len(audio_data_bytes)} bytes)")
 
                 # TTS 오디오를 프론트엔드로 전송 (파동 그래프용)
                 import base64
                 audio_base64 = base64.b64encode(audio_data_bytes).decode('utf-8')
+                logger.info(f"📤 Sending audio_data message to frontend: {len(audio_base64)} chars (base64)")
                 await self._send_json(websocket, {
                     "type": "audio_data",
                     "data": audio_base64,  # "audio" -> "data"로 변경 (프론트엔드와 일치)
                     "sample_rate": self.pipeline.tts.sample_rate,
                 })
+                logger.info(f"✅ audio_data message sent successfully")
+            else:
+                logger.warning(f"⚠️ TTS returned empty audio: audio_data_np={audio_data_np}")
 
                 # bytes를 AsyncGenerator로 변환
                 async def audio_stream_generator():
@@ -459,7 +509,9 @@ class AvatarWebSocketHandler:
                 
                 # 립싱크가 적용된 비디오 프레임 스트림 생성
                 try:
-                    logger.info(f"Starting lip sync rendering: sample_rate={self.pipeline.tts.sample_rate}, audio_bytes={len(audio_data_bytes)}")
+                    logger.info(f"🎬 Starting lip sync rendering: sample_rate={self.pipeline.tts.sample_rate}, audio_bytes={len(audio_data_bytes)}")
+                    await self._send_status(websocket, "speaking")
+                    
                     frame_count = 0
                     async for frame in self.pipeline.renderer.render_with_audio(
                         audio_stream=audio_stream_generator(),
@@ -475,9 +527,21 @@ class AvatarWebSocketHandler:
                         frame_count += 1
                         
                         if frame_count % 30 == 0:  # 30프레임마다 로그
-                            logger.debug(f"Sent {frame_count} lip sync frames")
+                            logger.info(f"📹 Sent {frame_count} lip sync frames")
 
-                    logger.info(f"Lipsync video stream completed: {frame_count} frames sent")
+                    logger.info(f"✅ Lipsync video stream completed: {frame_count} frames sent")
+                    
+                    # 립싱크 완료 후 idle 스트림 재시작
+                    await self._send_status(websocket, "idle")
+                    if connection_id in self._active_connections:
+                        connection = self._active_connections[connection_id]
+                        if not connection.get("idle_task") or (hasattr(connection["idle_task"], 'done') and connection["idle_task"].done()):
+                            logger.info("🔄 Restarting idle stream after lip sync...")
+                            idle_task = asyncio.create_task(
+                                self._start_idle_stream_background(websocket, session_id, connection_id)
+                            )
+                            connection["idle_task"] = idle_task
+                            connection["is_streaming"] = False  # idle 스트림이 시작되면 다시 True로 설정됨
                 except Exception as e:
                     logger.error(f"Error in render_with_audio: {e}", exc_info=True)
                     # 립싱크 실패해도 연결은 유지
