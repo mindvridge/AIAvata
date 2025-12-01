@@ -366,6 +366,17 @@ class AvatarRenderer:
         """현재 감정 상태 반환"""
         return self._current_emotion
 
+    def _reset_lipsync_buffer(self) -> None:
+        """
+        립싱크 오디오 버퍼 초기화
+
+        새 문장/세션 시작 전 호출하여 이전 오디오 데이터가
+        새 립싱크에 영향을 주지 않도록 함
+        """
+        if self._musetalk_model and hasattr(self._musetalk_model, 'reset_audio_buffer'):
+            self._musetalk_model.reset_audio_buffer()
+            logger.debug("MuseTalk audio buffer reset")
+
     def get_idle_frame(self) -> np.ndarray:
         """
         현재 감정의 idle 루프에서 다음 프레임 반환
@@ -486,13 +497,16 @@ class AvatarRenderer:
         """
         self._ensure_initialized()
 
+        # 새 오디오 스트림 시작 전 MuseTalk 버퍼 초기화
+        self._reset_lipsync_buffer()
+
         frame_index = 0
         audio_buffer = b""
 
         # 프레임당 필요한 오디오 샘플 수
         samples_per_frame = int(audio_sample_rate / self.target_fps)
         bytes_per_frame = samples_per_frame * 2  # 16-bit audio
-        
+
         logger.debug(f"Starting audio stream rendering: sample_rate={audio_sample_rate}, fps={self.target_fps}, bytes_per_frame={bytes_per_frame}, MuseTalk available={self._musetalk_model is not None}")
 
         async for audio_chunk in audio_stream:
@@ -510,7 +524,9 @@ class AvatarRenderer:
                 base_frame = self.get_idle_frame()
 
                 # 립싱크 적용
-                lipsync_frame = await self._apply_lipsync(base_frame, frame_audio)
+                lipsync_frame = await self._apply_lipsync(
+                    base_frame, frame_audio, audio_sample_rate
+                )
 
                 # JPEG 인코딩
                 _, encoded = cv2.imencode(
@@ -535,36 +551,44 @@ class AvatarRenderer:
                     await asyncio.sleep(sleep_time)
 
     async def _apply_lipsync(
-        self, frame: np.ndarray, audio_chunk: bytes
+        self, frame: np.ndarray, audio_chunk: bytes, audio_sample_rate: int = 24000
     ) -> np.ndarray:
         """
         립싱크 적용 (MuseTalk 또는 시뮬레이션)
 
         Args:
             frame: 원본 프레임
-            audio_chunk: 해당 프레임의 오디오 데이터
+            audio_chunk: 해당 프레임의 오디오 데이터 (16-bit PCM)
+            audio_sample_rate: 오디오 샘플레이트
 
         Returns:
             립싱크 적용된 프레임
         """
+        if len(audio_chunk) == 0:
+            logger.debug("Empty audio chunk, skipping lip sync")
+            return frame
+
         # MuseTalk 모델이 있으면 사용
         if self._musetalk_model and hasattr(self._musetalk_model, 'process_frame'):
             try:
                 # bytes를 numpy array로 변환
-                if len(audio_chunk) == 0:
-                    logger.debug("Empty audio chunk, skipping lip sync")
-                    return frame
-                    
                 audio_array = np.frombuffer(audio_chunk, dtype=np.int16).astype(np.float32)
                 audio_array = audio_array / 32767.0  # Normalize to [-1, 1]
 
+                # MuseTalk은 16kHz를 기대하므로 필요시 리샘플링
+                target_sample_rate = 16000
+                if audio_sample_rate != target_sample_rate:
+                    audio_array = self._resample_audio(
+                        audio_array, audio_sample_rate, target_sample_rate
+                    )
+
                 logger.debug(f"Applying MuseTalk lip sync: frame shape={frame.shape}, audio samples={len(audio_array)}")
 
-                # MuseTalk 추론
+                # MuseTalk 추론 (16kHz로 통일)
                 lipsync_frame = await self._musetalk_model.process_frame(
                     source_frame=frame,
                     audio_chunk=audio_array,
-                    audio_sample_rate=24000,
+                    audio_sample_rate=target_sample_rate,
                 )
 
                 if lipsync_frame is not None and lipsync_frame.shape == frame.shape:
@@ -582,58 +606,139 @@ class AvatarRenderer:
         logger.debug("Using lip sync simulation")
         return await self._simulate_lipsync(frame, audio_chunk)
 
+    def _resample_audio(
+        self, audio: np.ndarray, orig_sr: int, target_sr: int
+    ) -> np.ndarray:
+        """
+        오디오 리샘플링
+
+        Args:
+            audio: 오디오 데이터 (float32)
+            orig_sr: 원본 샘플레이트
+            target_sr: 목표 샘플레이트
+
+        Returns:
+            리샘플링된 오디오
+        """
+        if orig_sr == target_sr:
+            return audio
+
+        try:
+            import librosa
+            return librosa.resample(audio, orig_sr=orig_sr, target_sr=target_sr)
+        except ImportError:
+            # librosa가 없으면 간단한 선형 보간
+            ratio = target_sr / orig_sr
+            new_length = int(len(audio) * ratio)
+            indices = np.linspace(0, len(audio) - 1, new_length)
+            return np.interp(indices, np.arange(len(audio)), audio).astype(np.float32)
+
     async def _simulate_lipsync(
         self, frame: np.ndarray, audio_chunk: bytes
     ) -> np.ndarray:
         """
-        간단한 립싱크 시뮬레이션
-        오디오 레벨에 따라 입 모양을 시각적으로 변경
+        MediaPipe 기반 립싱크 시뮬레이션
+        실제 입 위치를 감지하여 오디오 레벨에 따라 입 모양 변경
         """
         try:
-            import cv2
-
             # 오디오 레벨 계산
             audio_array = np.frombuffer(audio_chunk, dtype=np.int16).astype(np.float32)
+            if len(audio_array) == 0:
+                return frame
+
             audio_level = np.abs(audio_array).mean() / 32767.0  # 0.0 ~ 1.0
 
             # 입 열림 정도 (0 = 닫힘, 1 = 최대 열림)
             mouth_openness = min(audio_level * 3.0, 1.0)  # 레벨을 3배 증폭
 
+            # 너무 작은 레벨이면 처리하지 않음
+            if mouth_openness < 0.05:
+                return frame
+
             # 프레임 복사
-            result_frame = frame.copy().astype(np.float32)
-
-            # 입 영역 찾기 (대략적인 위치 - MediaPipe로 더 정확하게 할 수 있음)
+            result_frame = frame.copy()
             h, w = frame.shape[:2]
-            mouth_y = int(h * 0.65)  # 입 위치 (얼굴 하단 65%)
-            mouth_x = int(w * 0.5)   # 중심
-            mouth_w = int(w * 0.15)  # 입 너비
-            mouth_h = int(h * 0.08 * mouth_openness)  # 입 높이 (레벨에 따라)
 
-            # 입 열림 시각화 (어둡게)
-            if mouth_openness > 0.1:
+            # MediaPipe로 실제 입 위치 감지
+            mouth_center, mouth_width, mouth_height = self._detect_mouth_region(frame)
+
+            if mouth_center is not None:
+                # 실제 감지된 입 위치 사용
+                mouth_x, mouth_y = mouth_center
+                mouth_w = int(mouth_width * 0.8)  # 입 너비
+                mouth_h = int(mouth_height * mouth_openness * 1.5)  # 열림 정도에 따른 높이
+            else:
+                # Fallback: 기본 위치 사용
+                mouth_y = int(h * 0.68)
+                mouth_x = int(w * 0.5)
+                mouth_w = int(w * 0.12)
+                mouth_h = int(h * 0.06 * mouth_openness)
+
+            # 입 열림 시각화 (자연스러운 어두운 타원)
+            if mouth_h > 1:
+                # 입 내부 (어두운 색)
+                overlay = result_frame.copy()
                 cv2.ellipse(
-                    result_frame,
-                    (mouth_x, mouth_y),
-                    (mouth_w // 2, mouth_h),
+                    overlay,
+                    (int(mouth_x), int(mouth_y)),
+                    (mouth_w // 2, max(1, mouth_h)),
                     0, 0, 360,
-                    (0, 0, 0),  # 검은색
-                    -1  # 채우기
+                    (20, 20, 30),  # 어두운 색 (입 안)
+                    -1
                 )
+                # 블렌딩으로 자연스럽게
+                alpha = min(0.7, mouth_openness + 0.3)
+                result_frame = cv2.addWeighted(overlay, alpha, result_frame, 1 - alpha, 0)
 
-            # 입이 열릴 때 주변 밝기 미세 조정 (입 열림 효과)
-            if mouth_openness > 0.3:
-                # 입 주변을 약간 밝게
-                y1 = max(0, mouth_y - mouth_h - 5)
-                y2 = min(h, mouth_y + mouth_h + 5)
-                x1 = max(0, mouth_x - mouth_w)
-                x2 = min(w, mouth_x + mouth_w)
-                result_frame[y1:y2, x1:x2] *= (1.0 + mouth_openness * 0.1)
-
-            return np.clip(result_frame, 0, 255).astype(np.uint8)
+            return result_frame
 
         except Exception as e:
             logger.error(f"Lip sync simulation error: {e}")
             return frame
+
+    def _detect_mouth_region(
+        self, frame: np.ndarray
+    ) -> tuple[tuple[int, int] | None, int, int]:
+        """
+        MediaPipe로 입 영역 감지
+
+        Returns:
+            (mouth_center, mouth_width, mouth_height) 또는 (None, 0, 0)
+        """
+        if self._face_mesh is None:
+            return None, 0, 0
+
+        try:
+            h, w = frame.shape[:2]
+            rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            results = self._face_mesh.process(rgb_frame)
+
+            if not results.multi_face_landmarks:
+                return None, 0, 0
+
+            landmarks = results.multi_face_landmarks[0].landmark
+
+            # 입 랜드마크 인덱스 (MediaPipe Face Mesh)
+            # 13: 윗입술 중앙, 14: 아랫입술 중앙
+            # 78: 왼쪽 입꼬리, 308: 오른쪽 입꼬리
+            upper_lip = landmarks[13]
+            lower_lip = landmarks[14]
+            left_corner = landmarks[78]
+            right_corner = landmarks[308]
+
+            # 입 중심 계산
+            mouth_center_x = int((left_corner.x + right_corner.x) / 2 * w)
+            mouth_center_y = int((upper_lip.y + lower_lip.y) / 2 * h)
+
+            # 입 크기 계산
+            mouth_width = int(abs(right_corner.x - left_corner.x) * w)
+            mouth_height = int(abs(lower_lip.y - upper_lip.y) * h)
+
+            return (mouth_center_x, mouth_center_y), mouth_width, max(mouth_height, 5)
+
+        except Exception as e:
+            logger.debug(f"Mouth detection failed: {e}")
+            return None, 0, 0
 
     def detect_face_landmarks(self, image: np.ndarray) -> Optional[dict]:
         """
