@@ -122,6 +122,17 @@ class Settings(BaseSettings):
         default=False, description="Allow users to set custom system prompts"
     )
 
+    # WebSocket Reconnection Settings
+    websocket_heartbeat_interval: int = Field(
+        default=30, description="Heartbeat ping interval in seconds"
+    )
+    websocket_heartbeat_timeout: int = Field(
+        default=10, description="Heartbeat response timeout in seconds"
+    )
+    websocket_reconnect_window: int = Field(
+        default=60, description="Time window for session reconnection in seconds"
+    )
+
     # Server Settings
     host: str = Field(default="0.0.0.0", description="Server host")
     port: int = Field(default=8000, description="Server port")

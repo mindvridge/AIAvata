@@ -7,13 +7,25 @@ WebSocket Handler for realtime avatar communication.
 import asyncio
 import json
 import logging
+import time
 from collections import deque
+from dataclasses import dataclass, field
 from typing import Optional
 from uuid import UUID
 
 from fastapi import WebSocket, WebSocketDisconnect
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class DisconnectedSession:
+    """연결 끊김 후 재연결을 위한 세션 상태 저장"""
+    session_id: UUID
+    disconnected_at: float
+    audio_buffer: deque = field(default_factory=deque)
+    audio_buffer_size: int = 0
+    was_streaming: bool = False
 
 
 class AvatarWebSocketHandler:
@@ -34,11 +46,15 @@ class AvatarWebSocketHandler:
         """
         self.pipeline = pipeline
         self._active_connections: dict = {}
+        self._disconnected_sessions: dict[UUID, DisconnectedSession] = {}
         # 상수 캐싱 (매 호출마다 재계산 방지)
         self._max_audio_buffer_size: int = (
             pipeline.settings.audio_sample_rate * 2 *
             pipeline.settings.audio_buffer_max_seconds
         )
+        self._heartbeat_interval: int = pipeline.settings.websocket_heartbeat_interval
+        self._heartbeat_timeout: int = pipeline.settings.websocket_heartbeat_timeout
+        self._reconnect_window: int = pipeline.settings.websocket_reconnect_window
 
     async def handle_connection(
         self,
@@ -67,6 +83,17 @@ class AvatarWebSocketHandler:
                 await websocket.close()
                 return
 
+        # 재연결 세션 확인 및 복구
+        restored_state = None
+        if uuid_session and uuid_session in self._disconnected_sessions:
+            restored_state = self._disconnected_sessions.pop(uuid_session)
+            elapsed = time.time() - restored_state.disconnected_at
+            if elapsed <= self._reconnect_window:
+                logger.info(f"Session {uuid_session} reconnected after {elapsed:.1f}s")
+            else:
+                logger.info(f"Session {uuid_session} reconnect window expired ({elapsed:.1f}s > {self._reconnect_window}s)")
+                restored_state = None
+
         # 연결 등록
         self._active_connections[connection_id] = {
             "websocket": websocket,
@@ -74,14 +101,31 @@ class AvatarWebSocketHandler:
             "is_streaming": False,
             "idle_task": None,
             "processing_audio": False,
-            "audio_buffer": deque(),  # 오디오 청크 버퍼
-            "audio_buffer_size": 0,   # 현재 버퍼 크기 (바이트)
+            "audio_buffer": restored_state.audio_buffer if restored_state else deque(),
+            "audio_buffer_size": restored_state.audio_buffer_size if restored_state else 0,
             "stream_lock": asyncio.Lock(),  # 스트리밍 상태 동기화용 락
+            "last_activity": time.time(),
+            "last_pong": time.time(),
+            "heartbeat_task": None,
         }
 
         try:
-            # 초기 상태 전송
-            await self._send_status(websocket, "connected")
+            # 초기 상태 전송 (재연결 시 restored 상태 포함)
+            if restored_state:
+                await self._send_json(websocket, {
+                    "type": "status",
+                    "status": "reconnected",
+                    "session_id": str(uuid_session),
+                    "buffered_audio_bytes": restored_state.audio_buffer_size,
+                })
+            else:
+                await self._send_status(websocket, "connected")
+
+            # Heartbeat 태스크 시작
+            heartbeat_task = asyncio.create_task(
+                self._heartbeat_loop(websocket, connection_id)
+            )
+            self._active_connections[connection_id]["heartbeat_task"] = heartbeat_task
 
             # 백그라운드에서 idle 스트림 자동 시작
             idle_task = asyncio.create_task(
@@ -92,7 +136,11 @@ class AvatarWebSocketHandler:
             # 메시지 수신 루프
             while True:
                 message = await websocket.receive()
-                
+
+                # 활동 시간 업데이트
+                if connection_id in self._active_connections:
+                    self._active_connections[connection_id]["last_activity"] = time.time()
+
                 logger.debug(f"Raw message received: type={message.get('type')}, keys={list(message.keys())}")
 
                 if message["type"] == "websocket.receive":
@@ -125,6 +173,17 @@ class AvatarWebSocketHandler:
             await self._send_error(websocket, str(e))
 
         finally:
+            # Heartbeat 태스크 취소
+            connection = self._active_connections.get(connection_id)
+            if connection and connection.get("heartbeat_task"):
+                heartbeat_task = connection["heartbeat_task"]
+                if not heartbeat_task.done():
+                    heartbeat_task.cancel()
+                    try:
+                        await heartbeat_task
+                    except asyncio.CancelledError:
+                        pass
+
             # idle 스트림 취소
             if idle_task and not idle_task.done():
                 idle_task.cancel()
@@ -133,8 +192,21 @@ class AvatarWebSocketHandler:
                 except asyncio.CancelledError:
                     pass
 
-            # 연결 해제
+            # 세션 상태 저장 (재연결 지원)
             if connection_id in self._active_connections:
+                conn = self._active_connections[connection_id]
+                if conn.get("session_id"):
+                    # 만료된 세션 정리
+                    self._cleanup_expired_disconnected_sessions()
+                    # 현재 세션 상태 저장
+                    self._disconnected_sessions[conn["session_id"]] = DisconnectedSession(
+                        session_id=conn["session_id"],
+                        disconnected_at=time.time(),
+                        audio_buffer=conn.get("audio_buffer", deque()),
+                        audio_buffer_size=conn.get("audio_buffer_size", 0),
+                        was_streaming=conn.get("is_streaming", False),
+                    )
+                    logger.info(f"Session {conn['session_id']} state saved for reconnection")
                 del self._active_connections[connection_id]
 
     async def _handle_audio(
@@ -257,8 +329,15 @@ class AvatarWebSocketHandler:
             logger.debug(f"Processing control message type: {msg_type}")
 
             if msg_type == "ping":
-                # Ping/Pong
+                # Ping/Pong (클라이언트 요청)
                 await self._send_json(websocket, {"type": "pong"})
+
+            elif msg_type == "pong":
+                # Pong 응답 (heartbeat에 대한 클라이언트 응답)
+                connection_id = id(websocket)
+                if connection_id in self._active_connections:
+                    self._active_connections[connection_id]["last_pong"] = time.time()
+                    logger.debug(f"Pong received from connection {connection_id}")
 
             elif msg_type == "set_emotion":
                 # 감정 변경
@@ -676,9 +755,82 @@ class AvatarWebSocketHandler:
         except Exception as e:
             logger.error(f"Failed to send message: {e}")
 
+    async def _heartbeat_loop(self, websocket: WebSocket, connection_id: int):
+        """
+        주기적으로 ping을 보내고 응답을 확인하는 heartbeat 루프
+
+        Args:
+            websocket: WebSocket 연결
+            connection_id: 연결 ID
+        """
+        try:
+            while connection_id in self._active_connections:
+                await asyncio.sleep(self._heartbeat_interval)
+
+                connection = self._active_connections.get(connection_id)
+                if connection is None:
+                    break
+
+                # Ping 전송
+                try:
+                    await self._send_json(websocket, {"type": "ping"})
+                except Exception as e:
+                    logger.warning(f"Failed to send heartbeat ping: {e}")
+                    break
+
+                # 타임아웃 대기 후 pong 응답 확인
+                await asyncio.sleep(self._heartbeat_timeout)
+
+                connection = self._active_connections.get(connection_id)
+                if connection is None:
+                    break
+
+                # pong 응답 확인
+                time_since_pong = time.time() - connection["last_pong"]
+                if time_since_pong > self._heartbeat_interval + self._heartbeat_timeout:
+                    logger.warning(
+                        f"Connection {connection_id} heartbeat timeout "
+                        f"(no pong for {time_since_pong:.1f}s)"
+                    )
+                    # 클라이언트에 연결 끊김 알림 시도
+                    try:
+                        await self._send_json(websocket, {
+                            "type": "error",
+                            "error": "heartbeat_timeout",
+                            "message": "Connection timeout - please reconnect",
+                        })
+                        await websocket.close(code=1001, reason="Heartbeat timeout")
+                    except Exception:
+                        pass
+                    break
+
+        except asyncio.CancelledError:
+            logger.debug(f"Heartbeat loop cancelled for connection {connection_id}")
+        except Exception as e:
+            logger.error(f"Heartbeat loop error: {e}")
+
+    def _cleanup_expired_disconnected_sessions(self):
+        """만료된 disconnected 세션 정리"""
+        now = time.time()
+        expired_sessions = [
+            session_id
+            for session_id, session in self._disconnected_sessions.items()
+            if now - session.disconnected_at > self._reconnect_window
+        ]
+        for session_id in expired_sessions:
+            del self._disconnected_sessions[session_id]
+            logger.debug(f"Expired disconnected session cleaned up: {session_id}")
+
+        if expired_sessions:
+            logger.info(f"Cleaned up {len(expired_sessions)} expired disconnected sessions")
+
     def get_active_connections_count(self) -> int:
         """활성 연결 수 반환"""
         return len(self._active_connections)
+
+    def get_disconnected_sessions_count(self) -> int:
+        """재연결 대기 중인 세션 수 반환"""
+        return len(self._disconnected_sessions)
 
 
 # 전역 핸들러 인스턴스 (main.py에서 설정)
