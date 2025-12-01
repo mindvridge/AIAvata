@@ -84,11 +84,13 @@ class TestTTSModule:
 
     def test_find_early_split_point_comma(self, tts_module):
         """쉼표에서 조기 분리 테스트"""
-        text = "안녕하세요, 저는 AI입니다"
+        # 함수는 [10, len-5) 범위에서 쉼표를 찾음
+        # 쉼표가 해당 범위에 있도록 충분히 긴 텍스트 사용
+        text = "안녕하세요 반갑습니다, 저는 AI 아바타입니다"  # 쉼표 위치: 11
         split_point = tts_module._find_early_split_point(text)
 
-        assert split_point > 0
-        assert text[:split_point].endswith(",")
+        assert split_point > 0, f"Expected split_point > 0, got {split_point} for text length {len(text)}"
+        assert text[:split_point].endswith(","), f"Expected text[:split_point] to end with comma, got '{text[:split_point]}'"
 
     def test_find_early_split_point_space(self, tts_module):
         """공백에서 조기 분리 테스트"""
