@@ -240,31 +240,14 @@ class ChatterboxTTSModel:
             로드 성공 여부
         """
         try:
-            import soundfile as sf
-
             path = Path(voice_path)
             if not path.exists():
                 logger.error(f"Voice file not found: {voice_path}")
                 return False
 
-            # 오디오 로드
-            audio, sr = sf.read(voice_path)
-
-            # 리샘플링 필요시
-            if sr != self.sample_rate:
-                try:
-                    import librosa
-                    audio = librosa.resample(audio, orig_sr=sr, target_sr=self.sample_rate)
-                except ImportError:
-                    pass
-
-            # Chatterbox 모델이 있으면 임베딩 추출
-            if hasattr(self._model, 'encode_voice'):
-                embedding = self._model.encode_voice(audio)
-                self._voice_embeddings[voice_id] = embedding
-            else:
-                # 원본 오디오 저장
-                self._voice_embeddings[voice_id] = audio
+            # Chatterbox는 파일 경로를 직접 사용
+            # 다른 TTS는 오디오 데이터를 저장
+            self._voice_embeddings[voice_id] = str(path.absolute())
 
             logger.info(f"Voice loaded: {voice_id}")
             return True
@@ -295,16 +278,20 @@ class ChatterboxTTSModel:
             return np.array([], dtype=np.float32)
 
         try:
-            # 음성 임베딩/샘플 가져오기
-            voice_prompt = None
+            # 음성 프롬프트 경로 가져오기 (음성 클로닝용)
+            voice_prompt_path = None
             if voice_id and voice_id in self._voice_embeddings:
-                voice_prompt = self._voice_embeddings[voice_id]
+                voice_prompt_path = self._voice_embeddings[voice_id]
 
             # 추론 실행
             if hasattr(self._model, 'generate'):
+                # Chatterbox API: generate(text, audio_prompt_path=None, ...)
                 audio = await asyncio.get_event_loop().run_in_executor(
                     None,
-                    lambda: self._model.generate(text=text, audio_prompt=voice_prompt)
+                    lambda: self._model.generate(
+                        text=text,
+                        audio_prompt_path=voice_prompt_path
+                    )
                 )
             else:
                 # 폴백
