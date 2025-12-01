@@ -107,7 +107,66 @@ class ChatterboxTTSModel:
             return False
 
     def _create_fallback_tts(self):
-        """폴백 TTS 생성 (gTTS 또는 pyttsx3)"""
+        """폴백 TTS 생성 (EdgeTTS → gTTS → pyttsx3)"""
+        # Edge TTS 시도 (고품질, 무료) - 네트워크 연결 테스트 포함
+        try:
+            import edge_tts
+            import asyncio
+
+            class EdgeTTSFallback:
+                def __init__(self, sample_rate):
+                    self.sample_rate = sample_rate
+                    self.voice = "ko-KR-SunHiNeural"  # 한국어 여성 음성
+                    self._network_ok = None  # 네트워크 상태 캐시
+
+                def generate(self, text, audio_prompt=None):
+                    # 새 이벤트 루프 생성 (스레드 안전)
+                    loop = asyncio.new_event_loop()
+                    try:
+                        return loop.run_until_complete(self._generate_async(text))
+                    except Exception as e:
+                        logger.warning(f"Edge TTS generation failed: {e}")
+                        # 네트워크 오류 시 무음 반환하지 않고 예외 발생
+                        raise
+                    finally:
+                        loop.close()
+
+                async def _generate_async(self, text):
+                    import io
+                    import soundfile as sf
+
+                    communicate = edge_tts.Communicate(text, self.voice)
+                    audio_data = b""
+                    async for chunk in communicate.stream():
+                        if chunk["type"] == "audio":
+                            audio_data += chunk["data"]
+
+                    if not audio_data:
+                        raise RuntimeError("Edge TTS returned no audio data")
+
+                    # MP3 -> numpy
+                    audio_io = io.BytesIO(audio_data)
+                    audio, sr = sf.read(audio_io)
+                    # 리샘플링
+                    if sr != self.sample_rate:
+                        import librosa
+                        audio = librosa.resample(audio, orig_sr=sr, target_sr=self.sample_rate)
+                    return audio.astype(np.float32)
+
+            # Edge TTS 연결 테스트
+            test_wrapper = EdgeTTSFallback(self.sample_rate)
+            try:
+                test_audio = test_wrapper.generate("test")
+                if len(test_audio) > 0:
+                    logger.info("Using Edge TTS as fallback TTS (high quality)")
+                    return test_wrapper
+            except Exception as e:
+                logger.warning(f"Edge TTS connectivity test failed: {e}")
+                raise ImportError("Edge TTS not available (network issue)")
+
+        except (ImportError, Exception) as e:
+            logger.warning(f"edge-tts not available ({e}), trying gTTS...")
+
         try:
             # gTTS 시도
             from gtts import gTTS
