@@ -57,68 +57,73 @@ echo       Git 확인 완료
 echo.
 echo [3.5/10] FFmpeg 확인 중...
 
-:: 로컬 설치된 FFmpeg 경로 확인
-if exist "tools\ffmpeg\ffmpeg-master-latest-win64-gpl\bin\ffmpeg.exe" (
+:: 로컬 설치된 FFmpeg 경로 확인 (이미 다운로드된 경우 스킵)
+set "LOCAL_FFMPEG=%~dp0tools\ffmpeg\ffmpeg-master-latest-win64-gpl\bin\ffmpeg.exe"
+if exist "%LOCAL_FFMPEG%" (
     set "PATH=%~dp0tools\ffmpeg\ffmpeg-master-latest-win64-gpl\bin;%PATH%"
     echo       로컬 FFmpeg 발견, 경로 추가됨
+    goto ffmpeg_done
 )
 
+:: 시스템 FFmpeg 확인
 ffmpeg -version >nul 2>&1
-if errorlevel 1 (
-    echo       FFmpeg가 설치되어 있지 않습니다. 자동 설치를 시도합니다...
-
-    :: winget으로 설치 시도 (Windows 10/11)
-    winget --version >nul 2>&1
-    if not errorlevel 1 (
-        echo       winget으로 FFmpeg 설치 중...
-        winget install Gyan.FFmpeg --accept-source-agreements --accept-package-agreements -h
-        if not errorlevel 1 (
-            echo       FFmpeg 설치 완료! (재시작 후 적용됩니다)
-            set FFMPEG_INSTALLED=1
-        ) else (
-            echo       winget 설치 실패, 수동 다운로드를 시도합니다...
-        )
-    )
-
-    :: winget 실패 시 직접 다운로드
-    if not defined FFMPEG_INSTALLED (
-        echo       FFmpeg를 직접 다운로드합니다... (약 80MB, 1-2분 소요)
-
-        :: tools 폴더에 ffmpeg 다운로드
-        if not exist "tools" mkdir tools
-        if not exist "tools\ffmpeg" mkdir tools\ffmpeg
-
-        :: curl로 다운로드 시도 (Windows 10 이상 기본 제공, 진행률 표시)
-        echo       다운로드 중... (진행률이 표시됩니다)
-        curl -L -o "tools\ffmpeg.zip" "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip" --progress-bar
-
-        if exist "tools\ffmpeg.zip" (
-            echo       압축 해제 중...
-            powershell -Command "Expand-Archive -Path 'tools\ffmpeg.zip' -DestinationPath 'tools\ffmpeg' -Force"
-            del "tools\ffmpeg.zip" 2>nul
-        ) else (
-            echo       curl 다운로드 실패, PowerShell로 재시도...
-            powershell -Command "& { $ProgressPreference='Continue'; Write-Host 'Downloading FFmpeg...'; Invoke-WebRequest -Uri 'https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip' -OutFile 'tools\ffmpeg.zip'; Expand-Archive -Path 'tools\ffmpeg.zip' -DestinationPath 'tools\ffmpeg' -Force; Remove-Item 'tools\ffmpeg.zip' -Force }"
-        )
-
-        if exist "tools\ffmpeg\ffmpeg-master-latest-win64-gpl\bin\ffmpeg.exe" (
-            echo       FFmpeg 다운로드 완료!
-
-            :: PATH에 추가 (현재 세션)
-            set "PATH=%~dp0tools\ffmpeg\ffmpeg-master-latest-win64-gpl\bin;%PATH%"
-            echo       현재 세션에 FFmpeg 경로 추가됨
-        ) else (
-            echo       [경고] FFmpeg 다운로드 실패
-            echo       수동으로 설치해주세요: https://ffmpeg.org/download.html
-            echo       또는: choco install ffmpeg
-            echo.
-            echo       FFmpeg 없이도 실행은 가능하지만 한국어 TTS가 작동하지 않을 수 있습니다.
-            timeout /t 5 /nobreak >nul
-        )
-    )
-) else (
+if not errorlevel 1 (
     echo       FFmpeg 확인 완료
+    goto ffmpeg_done
 )
+
+:: FFmpeg가 없으면 설치
+echo       FFmpeg가 설치되어 있지 않습니다. 자동 설치를 시도합니다...
+
+:: winget으로 설치 시도 (Windows 10/11)
+winget --version >nul 2>&1
+if not errorlevel 1 (
+    echo       winget으로 FFmpeg 설치 중...
+    winget install Gyan.FFmpeg --accept-source-agreements --accept-package-agreements -h
+    if not errorlevel 1 (
+        echo       FFmpeg 설치 완료! (재시작 후 적용됩니다)
+        goto ffmpeg_done
+    ) else (
+        echo       winget 설치 실패, 수동 다운로드를 시도합니다...
+    )
+)
+
+:: winget 실패 시 직접 다운로드
+echo       FFmpeg를 직접 다운로드합니다... (약 80MB, 1-2분 소요)
+
+:: tools 폴더에 ffmpeg 다운로드
+if not exist "tools" mkdir tools
+if not exist "tools\ffmpeg" mkdir tools\ffmpeg
+
+:: curl로 다운로드 시도 (Windows 10 이상 기본 제공, 진행률 표시)
+echo       다운로드 중... (진행률이 표시됩니다)
+curl -L -o "tools\ffmpeg.zip" "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip" --progress-bar
+
+if exist "tools\ffmpeg.zip" (
+    echo       압축 해제 중...
+    powershell -Command "Expand-Archive -Path 'tools\ffmpeg.zip' -DestinationPath 'tools\ffmpeg' -Force"
+    del "tools\ffmpeg.zip" 2>nul
+) else (
+    echo       curl 다운로드 실패, PowerShell로 재시도...
+    powershell -Command "& { $ProgressPreference='Continue'; Write-Host 'Downloading FFmpeg...'; Invoke-WebRequest -Uri 'https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip' -OutFile 'tools\ffmpeg.zip'; Expand-Archive -Path 'tools\ffmpeg.zip' -DestinationPath 'tools\ffmpeg' -Force; Remove-Item 'tools\ffmpeg.zip' -Force }"
+)
+
+if exist "tools\ffmpeg\ffmpeg-master-latest-win64-gpl\bin\ffmpeg.exe" (
+    echo       FFmpeg 다운로드 완료!
+
+    :: PATH에 추가 (현재 세션)
+    set "PATH=%~dp0tools\ffmpeg\ffmpeg-master-latest-win64-gpl\bin;%PATH%"
+    echo       현재 세션에 FFmpeg 경로 추가됨
+) else (
+    echo       [경고] FFmpeg 다운로드 실패
+    echo       수동으로 설치해주세요: https://ffmpeg.org/download.html
+    echo       또는: choco install ffmpeg
+    echo.
+    echo       FFmpeg 없이도 실행은 가능하지만 한국어 TTS가 작동하지 않을 수 있습니다.
+    timeout /t 5 /nobreak >nul
+)
+
+:ffmpeg_done
 
 :: ============================================================
 :: 4. NVIDIA GPU 확인 및 PyTorch 설치
