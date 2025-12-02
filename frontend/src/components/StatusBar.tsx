@@ -7,7 +7,7 @@
 import React, { useEffect, useState } from 'react';
 import { Wifi, WifiOff, Cpu, HardDrive, Clock } from 'lucide-react';
 import { clsx } from 'clsx';
-import { api } from '../lib/api';
+import { api } from '../services/api';
 import type { ConnectionState } from '../types';
 
 interface StatusBarProps {
