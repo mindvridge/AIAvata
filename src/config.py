@@ -133,13 +133,13 @@ class Settings(BaseSettings):
 
     # WebSocket Reconnection Settings
     websocket_heartbeat_interval: int = Field(
-        default=30, description="Heartbeat ping interval in seconds"
+        default=60, description="Heartbeat ping interval in seconds"
     )
     websocket_heartbeat_timeout: int = Field(
-        default=10, description="Heartbeat response timeout in seconds"
+        default=120, description="Heartbeat response timeout in seconds"
     )
     websocket_reconnect_window: int = Field(
-        default=60, description="Time window for session reconnection in seconds"
+        default=120, description="Time window for session reconnection in seconds"
     )
 
     # Server Settings
