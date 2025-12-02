@@ -41,9 +41,9 @@ export function useAvatarSession(
   const getWsUrl = useCallback(() => {
     if (wsUrlRef.current) return wsUrlRef.current;
 
-    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const host = window.location.host;
-    return `${protocol}//${host}/ws/avatar`;
+    // 환경변수에서 WebSocket URL 가져오기 (기본값: 백엔드 서버 8000 포트)
+    const wsBaseUrl = import.meta.env.VITE_WS_URL || 'ws://localhost:8000';
+    return `${wsBaseUrl}/ws/avatar`;
   }, []);
 
   const handleVideoFrame = useCallback((data: ArrayBuffer) => {
