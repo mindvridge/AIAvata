@@ -638,15 +638,18 @@ class AvatarRenderer:
             # 오디오 레벨 계산
             audio_array = np.frombuffer(audio_chunk, dtype=np.int16).astype(np.float32)
             if len(audio_array) == 0:
+                logger.debug("Empty audio array, skipping lip sync")
                 return frame
 
             audio_level = np.abs(audio_array).mean() / 32767.0  # 0.0 ~ 1.0
 
             # 입 열림 정도 (0 = 닫힘, 1 = 최대 열림)
-            mouth_openness = min(audio_level * 3.0, 1.0)  # 레벨을 3배 증폭
+            mouth_openness = min(audio_level * 5.0, 1.0)  # 레벨을 5배 증폭 (더 민감하게)
 
-            # 너무 작은 레벨이면 처리하지 않음
-            if mouth_openness < 0.05:
+            logger.debug(f"Lip sync: audio_level={audio_level:.4f}, mouth_openness={mouth_openness:.4f}")
+
+            # 너무 작은 레벨이면 처리하지 않음 (임계값 낮춤)
+            if mouth_openness < 0.02:
                 return frame
 
             # 프레임 복사
@@ -660,13 +663,15 @@ class AvatarRenderer:
                 # 실제 감지된 입 위치 사용
                 mouth_x, mouth_y = mouth_center
                 mouth_w = int(mouth_width * 0.8)  # 입 너비
-                mouth_h = int(mouth_height * mouth_openness * 1.5)  # 열림 정도에 따른 높이
+                mouth_h = int(mouth_height * mouth_openness * 2.0)  # 열림 정도에 따른 높이 (증폭)
+                logger.debug(f"MediaPipe mouth detected: center=({mouth_x}, {mouth_y}), w={mouth_w}, h={mouth_h}")
             else:
-                # Fallback: 기본 위치 사용
+                # Fallback: 기본 위치 사용 (더 큰 입 크기)
                 mouth_y = int(h * 0.68)
                 mouth_x = int(w * 0.5)
-                mouth_w = int(w * 0.12)
-                mouth_h = int(h * 0.06 * mouth_openness)
+                mouth_w = int(w * 0.15)  # 더 큰 너비
+                mouth_h = int(h * 0.08 * mouth_openness)  # 더 큰 높이
+                logger.debug(f"Using fallback mouth position: center=({mouth_x}, {mouth_y}), w={mouth_w}, h={mouth_h}")
 
             # 입 열림 시각화 (자연스러운 어두운 타원)
             if mouth_h > 1:
