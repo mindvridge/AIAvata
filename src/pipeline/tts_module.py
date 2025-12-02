@@ -4,6 +4,7 @@ TTS Module with multiple provider support.
 다중 TTS 프로바이더 지원 모듈
 - edge-tts: Microsoft Azure 기반 한국어 TTS (무료, 빠름)
 - chatterbox: 음성 클로닝 지원 (영어만)
+- zonos: 고품질 음성 복제 TTS (다국어, 한국어 미지원)
 
 특징:
 - 200ms 미만 지연시간
@@ -38,11 +39,12 @@ class TTSModule:
     - 스트리밍 출력
     - edge-tts: 한국어 지원 (무료)
     - chatterbox: 음성 클로닝 지원 (영어)
+    - zonos: 고품질 음성 복제 (다국어)
     """
 
     def __init__(
         self,
-        provider: Literal["edge-tts", "chatterbox"] = "edge-tts",
+        provider: Literal["edge-tts", "chatterbox", "zonos"] = "edge-tts",
         voice: str = "ko-KR-SunHiNeural",
         voice_sample_path: Optional[str] = None,
         sample_rate: int = 24000,
@@ -68,6 +70,7 @@ class TTSModule:
         self.voice_id = voice_id
 
         self._chatterbox_model = None
+        self._zonos_model = None
         self._initialized = False
 
         logger.info(f"TTS Module created: provider={provider}, voice={voice}")
@@ -122,6 +125,28 @@ class TTSModule:
             except Exception as e:
                 logger.error(f"Failed to initialize Chatterbox TTS: {e}")
                 self._initialized = True  # 폴백 모드
+
+        elif self.provider == "zonos":
+            logger.info("Initializing Zonos TTS model...")
+            try:
+                from ..models.integrations import ZonosTTSModel
+
+                self._zonos_model = ZonosTTSModel(
+                    device=self.device,
+                    sample_rate=44100,  # Zonos uses 44.1kHz
+                )
+
+                success = await self._zonos_model.initialize()
+
+                if not success:
+                    logger.warning("Zonos TTS initialization returned False, using fallback")
+
+                self._initialized = True
+                logger.info("Zonos TTS model initialized successfully")
+
+            except Exception as e:
+                logger.error(f"Failed to initialize Zonos TTS: {e}")
+                self._initialized = True  # 폴백 모드
         else:
             logger.error(f"Unknown TTS provider: {self.provider}")
             self._initialized = True
@@ -155,6 +180,8 @@ class TTSModule:
             return await self._synthesize_edge_tts(text)
         elif self.provider == "chatterbox":
             return await self._synthesize_chatterbox(text, voice_id)
+        elif self.provider == "zonos":
+            return await self._synthesize_zonos(text, voice_id)
         else:
             logger.warning(f"Unknown provider: {self.provider}, using mock audio")
             return self._generate_mock_audio(len(text))
@@ -257,6 +284,42 @@ class TTSModule:
 
         except Exception as e:
             logger.error(f"TTS synthesis error: {e}", exc_info=True)
+            logger.warning(f"Falling back to mock audio for text: '{text[:50]}...'")
+            return self._generate_mock_audio(len(text))
+
+    async def _synthesize_zonos(self, text: str, voice_id: Optional[str] = None) -> np.ndarray:
+        """Zonos TTS로 음성 합성"""
+        use_voice_id = voice_id or self.voice_id
+
+        if self._zonos_model is None:
+            logger.warning(f"Zonos model not loaded, using mock audio for text: '{text[:50]}...'")
+            return self._generate_mock_audio(len(text))
+
+        try:
+            logger.debug(f"Calling Zonos TTS synthesize: text='{text[:50]}...', voice_id={use_voice_id}")
+            audio = await self._zonos_model.synthesize(
+                text=text,
+                voice_id=use_voice_id,
+                language="en",  # Zonos default language
+            )
+
+            if audio is not None and len(audio) > 0:
+                # Resample from 44.1kHz to target sample rate if needed
+                if self._zonos_model.sample_rate != self.sample_rate:
+                    import librosa
+                    audio = librosa.resample(
+                        audio,
+                        orig_sr=self._zonos_model.sample_rate,
+                        target_sr=self.sample_rate,
+                    )
+                logger.debug(f"Zonos TTS synthesize completed: {len(audio)} samples")
+            else:
+                logger.warning("Zonos TTS synthesize returned empty audio")
+
+            return audio
+
+        except Exception as e:
+            logger.error(f"Zonos TTS synthesis error: {e}", exc_info=True)
             logger.warning(f"Falling back to mock audio for text: '{text[:50]}...'")
             return self._generate_mock_audio(len(text))
 
@@ -483,5 +546,8 @@ class TTSModule:
         if self._chatterbox_model is not None:
             await self._chatterbox_model.cleanup()
             self._chatterbox_model = None
+        if self._zonos_model is not None:
+            await self._zonos_model.cleanup()
+            self._zonos_model = None
         self._initialized = False
         logger.info("TTS module cleaned up")

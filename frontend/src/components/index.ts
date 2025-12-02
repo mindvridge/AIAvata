@@ -7,3 +7,4 @@ export { ConversationPanel } from './ConversationPanel';
 export { ChatInput } from './ChatInput';
 export { ErrorLogPanel } from './ErrorLogPanel';
 export type { ErrorLogEntry } from './ErrorLogPanel';
+export { VoiceManagement } from './VoiceManagement';

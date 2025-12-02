@@ -59,6 +59,9 @@ class Settings(BaseSettings):
     default_avatar_image: str = Field(
         default="assets/avatars/avata.png", description="Default avatar image path"
     )
+    voices_dir: str = Field(
+        default="assets/voices", description="Directory for Zonos TTS voice profiles"
+    )
 
     # Avatar Settings
     system_prompt: str = Field(
@@ -81,8 +84,8 @@ class Settings(BaseSettings):
     video_height: int = Field(default=512, description="Output video height")
 
     # TTS Settings
-    tts_provider: Literal["edge-tts", "chatterbox"] = Field(
-        default="edge-tts", description="TTS provider (edge-tts for Korean, chatterbox for English)"
+    tts_provider: Literal["edge-tts", "chatterbox", "zonos"] = Field(
+        default="edge-tts", description="TTS provider (edge-tts for Korean, chatterbox for English, zonos for voice cloning)"
     )
     tts_voice: str = Field(
         default="ko-KR-SunHiNeural", description="TTS voice ID (edge-tts Korean voices: ko-KR-SunHiNeural, ko-KR-InJoonNeural)"

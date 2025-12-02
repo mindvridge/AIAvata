@@ -19,7 +19,9 @@ from .pipeline.orchestrator import PipelineOrchestrator
 from .services.livekit_service import LiveKitService
 from .services.tts_cache_service import TTSCacheService
 from .api.routes import router, set_services
+from .api.voice_routes import router as voice_router, set_zonos_tts
 from .api.websocket import set_websocket_handler, get_websocket_handler
+from .models.integrations.zonos_tts import ZonosTTSModel
 
 # 로깅 설정
 logging.basicConfig(
@@ -33,12 +35,13 @@ logger = logging.getLogger(__name__)
 pipeline: Optional[PipelineOrchestrator] = None
 livekit: Optional[LiveKitService] = None
 tts_cache: Optional[TTSCacheService] = None
+zonos_tts: Optional[ZonosTTSModel] = None
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """앱 시작/종료 시 리소스 관리"""
-    global pipeline, livekit, tts_cache
+    global pipeline, livekit, tts_cache, zonos_tts
 
     settings = get_settings()
 
@@ -68,9 +71,18 @@ async def lifespan(app: FastAPI):
         )
         await tts_cache.initialize()
 
+        # Zonos TTS 초기화
+        logger.info("Initializing Zonos TTS...")
+        zonos_tts = ZonosTTSModel(
+            device=settings.get_device(),
+            voices_dir=settings.voices_dir,
+        )
+        await zonos_tts.initialize()
+
         # 서비스 등록
         set_services(pipeline, livekit)
         set_websocket_handler(pipeline)
+        set_zonos_tts(zonos_tts)
 
         logger.info("=" * 60)
         logger.info("Avatar Pipeline initialized successfully!")
@@ -94,6 +106,8 @@ async def lifespan(app: FastAPI):
             await livekit.cleanup()
         if tts_cache:
             await tts_cache.cleanup()
+        if zonos_tts:
+            await zonos_tts.cleanup()
 
         logger.info("Shutdown complete")
 
@@ -121,6 +135,7 @@ app.add_middleware(
 
 # 라우터 등록
 app.include_router(router)
+app.include_router(voice_router)
 
 
 @app.get("/", tags=["Root"])
@@ -142,6 +157,8 @@ async def root():
             "list_avatars": "GET /api/avatars",
             "list_emotions": "GET /api/emotions",
             "metrics": "GET /api/metrics",
+            "voices": "GET /api/voices",
+            "voice_management": "POST /api/voices",
         }
     }
 

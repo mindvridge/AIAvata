@@ -14,6 +14,7 @@ import {
   ConversationPanel,
   ChatInput,
   ErrorLogPanel,
+  VoiceManagement,
 } from './components';
 import { useAvatarSession, useErrorLogger } from './hooks';
 import type { Emotion, ConnectionState } from './types';
@@ -35,6 +36,7 @@ function App() {
   const [isMuted, setIsMuted] = useState(false);
   const [showConversation, setShowConversation] = useState(true);
   const [showErrorLog, setShowErrorLog] = useState(false);
+  const [showVoiceManagement, setShowVoiceManagement] = useState(false);
   const [isConnecting, setIsConnecting] = useState(false);
   const [frameData, setFrameData] = useState<ArrayBuffer | null>(null);
   const [isChatLoading, setIsChatLoading] = useState(false);
@@ -252,6 +254,15 @@ function App() {
 
             <div className="flex items-center gap-2 sm:gap-4">
               <button
+                onClick={() => setShowVoiceManagement(true)}
+                className="px-2 sm:px-3 py-1 sm:py-1.5 text-xs sm:text-sm bg-purple-700 hover:bg-purple-600 rounded-lg transition-colors flex items-center gap-1"
+              >
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" />
+                </svg>
+                <span className="hidden sm:inline">Voice</span>
+              </button>
+              <button
                 onClick={() => setShowConversation(!showConversation)}
                 className="px-2 sm:px-3 py-1 sm:py-1.5 text-xs sm:text-sm bg-gray-700 hover:bg-gray-600 rounded-lg transition-colors"
               >
@@ -394,6 +405,18 @@ function App() {
         logs={errorLogs}
         onClear={clearErrorLogs}
       />
+
+      {/* Voice Management Panel */}
+      {showVoiceManagement && (
+        <VoiceManagement
+          onClose={() => setShowVoiceManagement(false)}
+          onSelectVoice={(voiceId) => {
+            console.log('Selected voice:', voiceId);
+            addInfo(`Voice selected: ${voiceId}`, 'Voice');
+            setShowVoiceManagement(false);
+          }}
+        />
+      )}
     </div>
   );
 }
