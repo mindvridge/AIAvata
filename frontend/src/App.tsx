@@ -58,10 +58,13 @@ function App() {
     setFrameData(data);
   }, []);
 
-  // Handle audio data from server - AudioWaveform에 전달
+  // Audio context ref for playback
+  const audioContextRef = useRef<AudioContext | null>(null);
+
+  // Handle audio data from server - AudioWaveform에 전달 + 오디오 재생
   const handleAudioDataFromServer = useCallback((data: ArrayBuffer, sampleRate: number) => {
     setAudioData(data);
-    
+
     // 오디오 레벨 계산 (간단한 방식)
     try {
       const audioView = new Int16Array(data);
@@ -74,6 +77,37 @@ function App() {
       setAudioLevel(level);
     } catch (error) {
       console.error('오디오 레벨 계산 실패:', error);
+    }
+
+    // 오디오 재생
+    try {
+      // AudioContext 초기화 (최초 한 번만)
+      if (!audioContextRef.current) {
+        audioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)();
+      }
+
+      const audioContext = audioContextRef.current;
+
+      // 16-bit PCM을 Float32로 변환
+      const pcmData = new Int16Array(data);
+      const floatData = new Float32Array(pcmData.length);
+      for (let i = 0; i < pcmData.length; i++) {
+        floatData[i] = pcmData[i] / 32768.0;
+      }
+
+      // AudioBuffer 생성
+      const audioBuffer = audioContext.createBuffer(1, floatData.length, sampleRate);
+      audioBuffer.copyToChannel(floatData, 0);
+
+      // 재생
+      const source = audioContext.createBufferSource();
+      source.buffer = audioBuffer;
+      source.connect(audioContext.destination);
+      source.start(0);
+
+      console.log(`🔊 Playing audio: ${floatData.length} samples at ${sampleRate}Hz`);
+    } catch (error) {
+      console.error('오디오 재생 실패:', error);
     }
   }, []);
 

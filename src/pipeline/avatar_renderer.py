@@ -501,9 +501,10 @@ class AvatarRenderer:
         samples_per_frame = int(audio_sample_rate / self.target_fps)
         bytes_per_frame = samples_per_frame * 2  # 16-bit audio
 
-        logger.debug(f"Starting audio stream rendering: sample_rate={audio_sample_rate}, fps={self.target_fps}, bytes_per_frame={bytes_per_frame}, MuseTalk available={self._musetalk_model is not None}")
+        logger.info(f"🎬 Starting audio stream rendering: sample_rate={audio_sample_rate}, fps={self.target_fps}, bytes_per_frame={bytes_per_frame}")
 
         async for audio_chunk in audio_stream:
+            logger.debug(f"Received audio chunk: {len(audio_chunk)} bytes, buffer: {len(audio_buffer)} bytes")
             audio_buffer += audio_chunk
 
             # 충분한 오디오가 쌓이면 프레임 생성
@@ -537,12 +538,20 @@ class AvatarRenderer:
                 )
 
                 frame_index += 1
+                if frame_index % 10 == 0:
+                    logger.info(f"🎬 Generated {frame_index} lip sync frames")
 
                 # 프레임 레이트 조절
                 elapsed = time.time() - frame_start
                 sleep_time = self.frame_duration - elapsed
                 if sleep_time > 0:
                     await asyncio.sleep(sleep_time)
+
+        # 남은 버퍼 처리
+        if len(audio_buffer) > 0:
+            logger.debug(f"Remaining audio buffer: {len(audio_buffer)} bytes (not enough for frame)")
+
+        logger.info(f"✅ Lip sync rendering complete: total {frame_index} frames generated")
 
     async def _apply_lipsync(
         self, frame: np.ndarray, audio_chunk: bytes, audio_sample_rate: int = 24000
