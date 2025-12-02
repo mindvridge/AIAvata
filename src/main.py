@@ -123,6 +123,29 @@ app.add_middleware(
 app.include_router(router)
 
 
+@app.get("/", tags=["Root"])
+async def root():
+    """
+    루트 엔드포인트 - 서비스 정보 반환
+    """
+    return {
+        "service": "Realtime AI Avatar Service",
+        "version": "1.0.0",
+        "status": "running",
+        "docs": "/docs",
+        "health": "/health",
+        "websocket": "/ws/avatar",
+        "endpoints": {
+            "health_check": "GET /health",
+            "create_session": "POST /api/avatar/create",
+            "generate_token": "POST /api/generate-token",
+            "list_avatars": "GET /api/avatars",
+            "list_emotions": "GET /api/emotions",
+            "metrics": "GET /api/metrics",
+        }
+    }
+
+
 @app.websocket("/ws/avatar")
 async def avatar_websocket_endpoint(websocket: WebSocket):
     """
