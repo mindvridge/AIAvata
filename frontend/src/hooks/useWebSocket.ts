@@ -73,6 +73,15 @@ export function useWebSocket(options: UseWebSocketOptions): UseWebSocketReturn {
     try {
       const message: WebSocketMessage = JSON.parse(event.data);
 
+      // Handle ping/pong heartbeat
+      if (message.type === 'ping') {
+        // 서버 ping에 대해 pong 응답
+        if (wsRef.current?.readyState === WebSocket.OPEN) {
+          wsRef.current.send(JSON.stringify({ type: 'pong' }));
+        }
+        return;
+      }
+
       // Handle status updates
       if (message.type === 'status') {
         const status = (message as { status: string }).status;
