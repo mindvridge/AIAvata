@@ -4,7 +4,7 @@ TTS Module with multiple provider support.
 다중 TTS 프로바이더 지원 모듈
 - edge-tts: Microsoft Azure 기반 한국어 TTS (무료, 빠름)
 - chatterbox: 음성 클로닝 지원 (영어만)
-- zonos: 고품질 음성 복제 TTS (다국어, 한국어 미지원)
+- zonos: 고품질 음성 복제 TTS (다국어, 한국어 포함)
 
 특징:
 - 200ms 미만 지연시간
@@ -300,7 +300,7 @@ class TTSModule:
             audio = await self._zonos_model.synthesize(
                 text=text,
                 voice_id=use_voice_id,
-                language="en",  # Zonos default language
+                language="ko",  # 한국어 기본값
             )
 
             if audio is not None and len(audio) > 0:

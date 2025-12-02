@@ -2,11 +2,9 @@
 Zonos TTS Integration Module.
 
 Zonos TTS - 고품질 다국어 음성 합성 및 음성 복제
-- 지원 언어: English, Japanese, Chinese, French, German
+- 지원 언어: Korean, English, Japanese, Chinese, French, German
 - 음성 복제: 몇 초의 참조 오디오로 가능
 - 감정 제어: 행복, 슬픔, 분노, 두려움 등
-
-Note: 한국어는 현재 지원되지 않음
 """
 
 import asyncio
@@ -54,11 +52,11 @@ class ZonosTTSModel:
     - 고품질 음성 합성
     - 음성 복제 (참조 오디오 기반)
     - 감정 제어
-    - 다국어 지원 (영어, 일본어, 중국어, 프랑스어, 독일어)
+    - 다국어 지원 (한국어, 영어, 일본어, 중국어, 프랑스어, 독일어)
     """
 
-    # 지원 언어
-    SUPPORTED_LANGUAGES = ["en", "ja", "zh", "fr", "de"]
+    # 지원 언어 (ko: 비공식 지원이지만 성능 우수)
+    SUPPORTED_LANGUAGES = ["ko", "en", "ja", "zh", "fr", "de"]
 
     # 감정 매핑
     EMOTIONS = {

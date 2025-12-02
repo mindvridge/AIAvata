@@ -410,7 +410,7 @@ async def get_supported_languages():
             {"code": "zh", "name": "Chinese", "supported": True},
             {"code": "fr", "name": "French", "supported": True},
             {"code": "de", "name": "German", "supported": True},
-            {"code": "ko", "name": "Korean", "supported": False},
+            {"code": "ko", "name": "Korean", "supported": True, "note": "비공식 지원"},
         ]
     }
 

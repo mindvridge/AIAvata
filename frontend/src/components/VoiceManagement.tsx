@@ -33,12 +33,12 @@ interface VoiceListResponse {
 
 // Language mapping
 const LANGUAGE_NAMES: Record<string, string> = {
+  ko: '한국어',
   en: 'English',
-  ja: 'Japanese',
-  zh: 'Chinese',
-  fr: 'French',
-  de: 'German',
-  ko: 'Korean (Not Supported)',
+  ja: '日本語',
+  zh: '中文',
+  fr: 'Français',
+  de: 'Deutsch',
 };
 
 // Emotion options
@@ -60,7 +60,7 @@ interface VoiceManagementProps {
 export function VoiceManagement({ onClose, onSelectVoice }: VoiceManagementProps) {
   // State
   const [voices, setVoices] = useState<VoiceProfile[]>([]);
-  const [supportedLanguages, setSupportedLanguages] = useState<string[]>(['en']);
+  const [supportedLanguages, setSupportedLanguages] = useState<string[]>(['ko', 'en', 'ja', 'zh', 'fr', 'de']);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -68,7 +68,7 @@ export function VoiceManagement({ onClose, onSelectVoice }: VoiceManagementProps
   const [showCreateForm, setShowCreateForm] = useState(false);
   const [createName, setCreateName] = useState('');
   const [createDescription, setCreateDescription] = useState('');
-  const [createLanguage, setCreateLanguage] = useState('en');
+  const [createLanguage, setCreateLanguage] = useState('ko');
   const [audioFile, setAudioFile] = useState<File | null>(null);
   const [creating, setCreating] = useState(false);
 
@@ -625,10 +625,10 @@ export function VoiceManagement({ onClose, onSelectVoice }: VoiceManagementProps
           <div className="flex items-center justify-between text-sm text-gray-400">
             <span>
               {voices.length} voice{voices.length !== 1 ? 's' : ''} |
-              Supported: {supportedLanguages.map(l => LANGUAGE_NAMES[l]?.split(' ')[0] || l).join(', ')}
+              지원 언어: {supportedLanguages.map(l => LANGUAGE_NAMES[l] || l).join(', ')}
             </span>
-            <span className="text-yellow-500">
-              Note: Korean is not supported by Zonos TTS
+            <span className="text-green-500">
+              Zonos TTS - 음성 복제 지원
             </span>
           </div>
         </div>

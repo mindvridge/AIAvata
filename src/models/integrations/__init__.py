@@ -5,7 +5,7 @@ Model integrations package.
 - MuseTalk: 립싱크
 - LivePortrait: 얼굴 애니메이션
 - Chatterbox: TTS (영어)
-- Zonos: TTS with Voice Cloning (다국어, 한국어 미지원)
+- Zonos: TTS with Voice Cloning (다국어, 한국어 포함)
 """
 
 from .musetalk import MuseTalkModel
