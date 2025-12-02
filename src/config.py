@@ -81,6 +81,12 @@ class Settings(BaseSettings):
     video_height: int = Field(default=512, description="Output video height")
 
     # TTS Settings
+    tts_provider: Literal["edge-tts", "chatterbox"] = Field(
+        default="edge-tts", description="TTS provider (edge-tts for Korean, chatterbox for English)"
+    )
+    tts_voice: str = Field(
+        default="ko-KR-SunHiNeural", description="TTS voice ID (edge-tts Korean voices: ko-KR-SunHiNeural, ko-KR-InJoonNeural)"
+    )
     tts_sample_rate: int = Field(default=24000, description="TTS audio sample rate")
     tts_chunk_size: int = Field(
         default=4096, description="TTS audio chunk size in bytes"

@@ -66,6 +66,8 @@ class PipelineOrchestrator:
         )
 
         self.tts = TTSModule(
+            provider=settings.tts_provider,
+            voice=settings.tts_voice,
             voice_sample_path=settings.voice_sample_path,
             sample_rate=settings.tts_sample_rate,
             device=settings.get_device(),

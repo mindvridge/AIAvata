@@ -13,7 +13,7 @@ cd /d "%~dp0"
 :: ============================================================
 :: 1. Python 확인
 :: ============================================================
-echo [1/9] Python 확인 중...
+echo [1/10] Python 확인 중...
 python --version >nul 2>&1
 if errorlevel 1 (
     echo       [오류] Python이 설치되어 있지 않습니다!
@@ -27,7 +27,7 @@ echo       Python 확인 완료
 :: 2. Node.js 확인
 :: ============================================================
 echo.
-echo [2/9] Node.js 확인 중...
+echo [2/10] Node.js 확인 중...
 node --version >nul 2>&1
 if errorlevel 1 (
     echo       [오류] Node.js가 설치되어 있지 않습니다!
@@ -41,7 +41,7 @@ echo       Node.js 확인 완료
 :: 3. Git 확인
 :: ============================================================
 echo.
-echo [3/9] Git 확인 중...
+echo [3/10] Git 확인 중...
 git --version >nul 2>&1
 if errorlevel 1 (
     echo       [오류] Git이 설치되어 있지 않습니다!
@@ -52,10 +52,29 @@ if errorlevel 1 (
 echo       Git 확인 완료
 
 :: ============================================================
+:: 3.5. FFmpeg 확인 (edge-tts MP3 변환용)
+:: ============================================================
+echo.
+echo [3.5/10] FFmpeg 확인 중...
+ffmpeg -version >nul 2>&1
+if errorlevel 1 (
+    echo       [경고] FFmpeg가 설치되어 있지 않습니다.
+    echo       한국어 TTS를 사용하려면 FFmpeg가 필요합니다.
+    echo       https://ffmpeg.org/download.html 에서 설치하거나
+    echo       choco install ffmpeg 또는 winget install FFmpeg 실행
+    echo       설치 후 시스템을 재시작해주세요.
+    echo.
+    echo       FFmpeg 없이도 실행은 가능하지만 TTS가 작동하지 않을 수 있습니다.
+    timeout /t 5 /nobreak >nul
+) else (
+    echo       FFmpeg 확인 완료
+)
+
+:: ============================================================
 :: 4. NVIDIA GPU 확인 및 PyTorch 설치
 :: ============================================================
 echo.
-echo [4/9] NVIDIA GPU 확인 중...
+echo [4/10] NVIDIA GPU 확인 중...
 set HAS_NVIDIA=0
 nvidia-smi >nul 2>&1
 if not errorlevel 1 (
@@ -81,7 +100,7 @@ if %HAS_NVIDIA%==1 (
 :: 5. 백엔드 패키지 설치
 :: ============================================================
 echo.
-echo [5/9] 백엔드 패키지 확인 중...
+echo [5/10] 백엔드 패키지 확인 중...
 python -c "import torch,openai,livekit,cv2,mediapipe" 2>nul
 if errorlevel 1 (
     echo       패키지 설치 중... (최초 1회, 약 5-10분 소요)
@@ -105,7 +124,7 @@ if errorlevel 1 (
     pip install openai anthropic livekit livekit-api -q
     pip install transformers diffusers huggingface_hub -q
     pip install funasr modelscope omegaconf kaldiio -q
-    pip install edge-tts gtts chatterbox-tts resemble-perth -q
+    pip install edge-tts gtts chatterbox-tts resemble-perth pydub -q
     pip install mediapipe librosa einops -q
 
     echo       패키지 설치 완료!
@@ -124,7 +143,7 @@ if errorlevel 1 (
 :: 6. MuseTalk 설치 (립싱크 모델)
 :: ============================================================
 echo.
-echo [6/9] MuseTalk 립싱크 모델 확인 중...
+echo [6/10] MuseTalk 립싱크 모델 확인 중...
 
 :: MuseTalk 소스 코드 클론
 if not exist "external\MuseTalk\musetalk" (
@@ -175,33 +194,56 @@ if not exist "models\musetalk\musetalkV15\unet.pth" (
     if not exist "models\musetalk\face-parse-bisent" mkdir "models\musetalk\face-parse-bisent"
     if not exist "models\musetalk\whisper" mkdir "models\musetalk\whisper"
 
-    :: HuggingFace에서 모델 다운로드
+    :: HuggingFace에서 모델 다운로드 (전체 repo)
+    echo       HuggingFace에서 MuseTalk 모델 다운로드 중...
     python -c "from huggingface_hub import snapshot_download; snapshot_download('TMElyralab/MuseTalk', local_dir='models/musetalk/hf_download', local_dir_use_symlinks=False)"
 
-    :: 파일 복사 (HuggingFace 구조에서 필요한 위치로)
+    :: 다운로드된 구조 확인 및 파일 복사 (다양한 경로 시도)
+    :: HuggingFace 구조: models/musetalk/, models/dwpose/, models/face-parse-bisent/, models/whisper/
+
+    :: MuseTalk 메인 모델 (musetalk.json, pytorch_model.bin)
     if exist "models\musetalk\hf_download\models\musetalk\musetalk.json" (
+        echo       Copying MuseTalk config from models/musetalk/
         copy "models\musetalk\hf_download\models\musetalk\musetalk.json" "models\musetalk\musetalkV15\" >nul
-    )
-    if exist "models\musetalk\hf_download\models\musetalk\pytorch_model.bin" (
         copy "models\musetalk\hf_download\models\musetalk\pytorch_model.bin" "models\musetalk\musetalkV15\unet.pth" >nul
+    ) else if exist "models\musetalk\hf_download\musetalk\musetalk.json" (
+        echo       Copying MuseTalk config from musetalk/
+        copy "models\musetalk\hf_download\musetalk\musetalk.json" "models\musetalk\musetalkV15\" >nul
+        copy "models\musetalk\hf_download\musetalk\pytorch_model.bin" "models\musetalk\musetalkV15\unet.pth" >nul
     )
 
     :: DWPose 모델
-    if exist "models\musetalk\hf_download\models\dwpose\dw-ll_ucoco_384.pth" (
-        copy "models\musetalk\hf_download\models\dwpose\*" "models\musetalk\dwpose\" >nul
+    if exist "models\musetalk\hf_download\models\dwpose" (
+        echo       Copying DWPose models...
+        xcopy "models\musetalk\hf_download\models\dwpose\*" "models\musetalk\dwpose\" /s /e /y >nul 2>nul
+    ) else if exist "models\musetalk\hf_download\dwpose" (
+        xcopy "models\musetalk\hf_download\dwpose\*" "models\musetalk\dwpose\" /s /e /y >nul 2>nul
     )
 
     :: Face parsing 모델
-    if exist "models\musetalk\hf_download\models\face-parse-bisent\*" (
-        xcopy "models\musetalk\hf_download\models\face-parse-bisent\*" "models\musetalk\face-parse-bisent\" /s /e /y >nul
+    if exist "models\musetalk\hf_download\models\face-parse-bisent" (
+        echo       Copying Face Parsing models...
+        xcopy "models\musetalk\hf_download\models\face-parse-bisent\*" "models\musetalk\face-parse-bisent\" /s /e /y >nul 2>nul
+    ) else if exist "models\musetalk\hf_download\face-parse-bisent" (
+        xcopy "models\musetalk\hf_download\face-parse-bisent\*" "models\musetalk\face-parse-bisent\" /s /e /y >nul 2>nul
     )
 
     :: Whisper 모델
-    if exist "models\musetalk\hf_download\models\whisper\*" (
-        xcopy "models\musetalk\hf_download\models\whisper\*" "models\musetalk\whisper\" /s /e /y >nul
+    if exist "models\musetalk\hf_download\models\whisper" (
+        echo       Copying Whisper models...
+        xcopy "models\musetalk\hf_download\models\whisper\*" "models\musetalk\whisper\" /s /e /y >nul 2>nul
+    ) else if exist "models\musetalk\hf_download\whisper" (
+        xcopy "models\musetalk\hf_download\whisper\*" "models\musetalk\whisper\" /s /e /y >nul 2>nul
     )
 
-    echo       MuseTalk 모델 다운로드 완료!
+    :: 최종 확인
+    if exist "models\musetalk\musetalkV15\unet.pth" (
+        echo       MuseTalk 모델 다운로드 완료!
+    ) else (
+        echo       [경고] MuseTalk 모델 파일을 찾을 수 없습니다.
+        echo       다운로드된 파일 구조를 확인하세요: models\musetalk\hf_download\
+        echo       수동으로 파일을 복사해야 할 수 있습니다.
+    )
 ) else (
     echo       MuseTalk 모델 확인됨
 )
@@ -219,7 +261,7 @@ if not exist "models\musetalk\sd-vae-ft-mse\config.json" (
 :: 7. 프론트엔드 패키지 설치
 :: ============================================================
 echo.
-echo [7/9] 프론트엔드 패키지 확인 중...
+echo [7/10] 프론트엔드 패키지 확인 중...
 if not exist "frontend\node_modules" (
     echo       npm install 실행 중...
     cd frontend
@@ -234,7 +276,7 @@ if not exist "frontend\node_modules" (
 :: 8. 환경설정
 :: ============================================================
 echo.
-echo [8/9] 환경 설정 확인 중...
+echo [8/10] 환경 설정 확인 중...
 
 if not exist ".env" (
     if exist ".env.example" (
@@ -263,7 +305,7 @@ echo       환경 설정 확인 완료
 :: 9. 서버 실행 (백엔드 + 프론트엔드)
 :: ============================================================
 echo.
-echo [9/9] 서버 시작 중...
+echo [9/10] 서버 시작 중...
 echo.
 echo ============================================================
 echo   백엔드 API:  http://localhost:8000

@@ -683,21 +683,20 @@ class AvatarWebSocketHandler:
                 })
                 logger.debug(f"Added assistant response to history: {response_text[:50]}...")
 
-            # 응답 텍스트 전송
-            await self._send_json(websocket, {
-                "type": "chat_response",
-                "text": response_text,
-                "user_message": text,
-            })
-
             # TTS로 음성 생성 및 립싱크 아바타 렌더링
+            # 텍스트와 오디오를 동시에 전송하여 동기화
             logger.info("🎤 Starting TTS and lip sync processing for chat response...")
             try:
-                await self._process_chat_with_tts(websocket, response_text, session_id)
+                await self._process_chat_with_tts(websocket, response_text, session_id, text)
                 logger.info("✅ TTS and lip sync processing completed successfully")
             except Exception as e:
                 logger.error(f"❌ TTS/Lipsync processing failed: {e}", exc_info=True)
-                # TTS 실패해도 텍스트 응답은 이미 전송했으므로 계속 진행
+                # TTS 실패 시에만 텍스트 응답 전송 (폴백)
+                await self._send_json(websocket, {
+                    "type": "chat_response",
+                    "text": response_text,
+                    "user_message": text,
+                })
 
         except Exception as e:
             logger.error(f"Chat processing error: {e}")
@@ -712,14 +711,17 @@ class AvatarWebSocketHandler:
         websocket: WebSocket,
         response_text: str,
         session_id: Optional[UUID],
+        user_message: str = "",
     ):
         """
         TTS로 음성 생성 및 립싱크 비디오 스트리밍
+        텍스트 응답과 오디오를 동시에 전송하여 동기화
 
         Args:
             websocket: WebSocket 연결
             response_text: LLM 응답 텍스트
             session_id: 세션 ID
+            user_message: 사용자 원본 메시지
         """
         connection_id = id(websocket)
         connection = self._active_connections.get(connection_id)
@@ -764,14 +766,24 @@ class AvatarWebSocketHandler:
             audio_data_bytes = self.pipeline.tts._audio_to_bytes(audio_data_np)
             logger.debug(f"TTS audio generated: {len(audio_data_np)} samples ({len(audio_data_bytes)} bytes)")
 
-            # TTS 오디오를 프론트엔드로 전송 (파동 그래프용)
+            # TTS 오디오와 텍스트 응답을 동시에 전송 (동기화)
             import base64
             audio_base64 = base64.b64encode(audio_data_bytes).decode('utf-8')
+
+            # 텍스트 응답 먼저 전송
+            await self._send_json(websocket, {
+                "type": "chat_response",
+                "text": response_text,
+                "user_message": user_message,
+            })
+
+            # 오디오 데이터 바로 이어서 전송
             await self._send_json(websocket, {
                 "type": "audio_data",
                 "data": audio_base64,
                 "sample_rate": self.pipeline.tts.sample_rate,
             })
+            logger.debug("Sent chat_response and audio_data together for synchronization")
 
             # bytes를 AsyncGenerator로 변환
             async def audio_stream_generator():
