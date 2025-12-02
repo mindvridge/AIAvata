@@ -3,9 +3,9 @@ chcp 65001 >nul
 title AI Avatar Service
 
 echo.
-echo ╔═══════════════════════════════════════════════════════════╗
-echo ║            AI Avatar Service - Windows                    ║
-echo ╚═══════════════════════════════════════════════════════════╝
+echo ============================================================
+echo            AI Avatar Service - Windows
+echo ============================================================
 echo.
 
 cd /d "%~dp0"
@@ -20,6 +20,7 @@ if errorlevel 1 (
     pip install transformers diffusers huggingface_hub -q
     pip install funasr modelscope omegaconf kaldiio -q
     pip install edge-tts gtts chatterbox-tts resemble-perth -q
+    pip install mediapipe -q
     echo       완료!
 ) else (
     echo       이미 설치됨 - 스킵
@@ -41,7 +42,7 @@ if not exist ".env" (
     if exist ".env.example" (
         copy .env.example .env >nul
         echo       .env 파일 생성됨
-        echo       ※ API 키를 설정해주세요!
+        echo       [!] API 키를 설정해주세요!
     )
 ) else (
     echo       .env 파일 존재
@@ -50,11 +51,11 @@ if not exist ".env" (
 echo.
 echo [4/4] 서버 시작...
 echo.
-echo ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+echo ============================================================
 echo   서버 주소: http://localhost:8000
 echo   API 문서:  http://localhost:8000/docs
 echo   종료: Ctrl+C
-echo ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+echo ============================================================
 echo.
 
 python -m uvicorn src.main:app --host 0.0.0.0 --port 8000 --reload

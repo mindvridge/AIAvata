@@ -233,21 +233,15 @@ class AvatarRenderer:
             return None
 
         try:
-            # 감정에 따른 모션 강도 설정
-            emotion_intensity = {
-                Emotion.NEUTRAL: 0.3,
-                Emotion.HAPPY: 0.5,
-                Emotion.SAD: 0.2,
-                Emotion.LISTENING: 0.4,
-                Emotion.THINKING: 0.35,
-            }
-            intensity = emotion_intensity.get(emotion, 0.3)
+            # num_frames를 duration_seconds로 변환
+            duration_seconds = num_frames / self.target_fps
 
             # LivePortrait로 프레임 시퀀스 생성
             frames = await self._live_portrait_model.generate_idle_sequence(
+                source_image=self._source_image,
                 emotion=emotion.value,
-                num_frames=num_frames,
-                motion_intensity=intensity,
+                duration_seconds=duration_seconds,
+                fps=self.target_fps,
             )
 
             return frames
