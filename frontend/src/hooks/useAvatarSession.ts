@@ -11,7 +11,7 @@ import type {
   UseAvatarSessionReturn,
   ConnectionState
 } from '../types';
-import { api } from '../lib/api';
+import { api } from '../services/api';
 import { useWebSocket } from './useWebSocket';
 
 interface ChatResponse {
