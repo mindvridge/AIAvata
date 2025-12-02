@@ -449,6 +449,11 @@ class MuseTalkModel:
                         output_np = output_np.clip(0, 255).astype(np.uint8)
                 elif isinstance(output, np.ndarray):
                     output_np = output.copy()
+                    # 4D 배열인 경우 배치 차원 제거
+                    if len(output_np.shape) == 4:  # [batch, H, W, C]
+                        output_np = output_np[0]  # 첫 번째만
+                    elif len(output_np.shape) == 3 and output_np.shape[0] == 3:  # [C, H, W]
+                        output_np = output_np.transpose(1, 2, 0)  # [H, W, C]
                     # 0-1 범위를 0-255로 변환
                     if output_np.max() <= 1.0:
                         output_np = (output_np * 255).clip(0, 255).astype(np.uint8)
