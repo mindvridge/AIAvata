@@ -82,14 +82,24 @@ if errorlevel 1 (
 
     :: winget 실패 시 직접 다운로드
     if not defined FFMPEG_INSTALLED (
-        echo       FFmpeg를 직접 다운로드합니다...
+        echo       FFmpeg를 직접 다운로드합니다... (약 80MB, 1-2분 소요)
 
         :: tools 폴더에 ffmpeg 다운로드
         if not exist "tools" mkdir tools
         if not exist "tools\ffmpeg" mkdir tools\ffmpeg
 
-        :: PowerShell로 다운로드 및 압축 해제
-        powershell -Command "& { $ProgressPreference='SilentlyContinue'; try { Invoke-WebRequest -Uri 'https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip' -OutFile 'tools\ffmpeg.zip' -UseBasicParsing; Expand-Archive -Path 'tools\ffmpeg.zip' -DestinationPath 'tools\ffmpeg' -Force; Remove-Item 'tools\ffmpeg.zip' -Force; Write-Host 'Download successful' } catch { Write-Host 'Download failed'; exit 1 } }"
+        :: curl로 다운로드 시도 (Windows 10 이상 기본 제공, 진행률 표시)
+        echo       다운로드 중... (진행률이 표시됩니다)
+        curl -L -o "tools\ffmpeg.zip" "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip" --progress-bar
+
+        if exist "tools\ffmpeg.zip" (
+            echo       압축 해제 중...
+            powershell -Command "Expand-Archive -Path 'tools\ffmpeg.zip' -DestinationPath 'tools\ffmpeg' -Force"
+            del "tools\ffmpeg.zip" 2>nul
+        ) else (
+            echo       curl 다운로드 실패, PowerShell로 재시도...
+            powershell -Command "& { $ProgressPreference='Continue'; Write-Host 'Downloading FFmpeg...'; Invoke-WebRequest -Uri 'https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip' -OutFile 'tools\ffmpeg.zip'; Expand-Archive -Path 'tools\ffmpeg.zip' -DestinationPath 'tools\ffmpeg' -Force; Remove-Item 'tools\ffmpeg.zip' -Force }"
+        )
 
         if exist "tools\ffmpeg\ffmpeg-master-latest-win64-gpl\bin\ffmpeg.exe" (
             echo       FFmpeg 다운로드 완료!
@@ -97,16 +107,6 @@ if errorlevel 1 (
             :: PATH에 추가 (현재 세션)
             set "PATH=%~dp0tools\ffmpeg\ffmpeg-master-latest-win64-gpl\bin;%PATH%"
             echo       현재 세션에 FFmpeg 경로 추가됨
-
-            :: 시스템 PATH에 영구 추가 여부 확인
-            echo.
-            echo       [선택] FFmpeg를 시스템 PATH에 영구적으로 추가하시겠습니까?
-            echo       (다음 실행부터 자동으로 FFmpeg를 찾을 수 있습니다)
-            choice /C YN /M "       영구 추가"
-            if not errorlevel 2 (
-                setx PATH "%~dp0tools\ffmpeg\ffmpeg-master-latest-win64-gpl\bin;%PATH%" >nul 2>&1
-                echo       시스템 PATH에 추가됨
-            )
         ) else (
             echo       [경고] FFmpeg 다운로드 실패
             echo       수동으로 설치해주세요: https://ffmpeg.org/download.html
