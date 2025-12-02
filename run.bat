@@ -52,20 +52,70 @@ if errorlevel 1 (
 echo       Git 확인 완료
 
 :: ============================================================
-:: 3.5. FFmpeg 확인 (edge-tts MP3 변환용)
+:: 3.5. FFmpeg 확인 및 자동 설치 (edge-tts MP3 변환용)
 :: ============================================================
 echo.
 echo [3.5/10] FFmpeg 확인 중...
+
+:: 로컬 설치된 FFmpeg 경로 확인
+if exist "tools\ffmpeg\ffmpeg-master-latest-win64-gpl\bin\ffmpeg.exe" (
+    set "PATH=%~dp0tools\ffmpeg\ffmpeg-master-latest-win64-gpl\bin;%PATH%"
+    echo       로컬 FFmpeg 발견, 경로 추가됨
+)
+
 ffmpeg -version >nul 2>&1
 if errorlevel 1 (
-    echo       [경고] FFmpeg가 설치되어 있지 않습니다.
-    echo       한국어 TTS를 사용하려면 FFmpeg가 필요합니다.
-    echo       https://ffmpeg.org/download.html 에서 설치하거나
-    echo       choco install ffmpeg 또는 winget install FFmpeg 실행
-    echo       설치 후 시스템을 재시작해주세요.
-    echo.
-    echo       FFmpeg 없이도 실행은 가능하지만 TTS가 작동하지 않을 수 있습니다.
-    timeout /t 5 /nobreak >nul
+    echo       FFmpeg가 설치되어 있지 않습니다. 자동 설치를 시도합니다...
+
+    :: winget으로 설치 시도 (Windows 10/11)
+    winget --version >nul 2>&1
+    if not errorlevel 1 (
+        echo       winget으로 FFmpeg 설치 중...
+        winget install Gyan.FFmpeg --accept-source-agreements --accept-package-agreements -h
+        if not errorlevel 1 (
+            echo       FFmpeg 설치 완료! (재시작 후 적용됩니다)
+            set FFMPEG_INSTALLED=1
+        ) else (
+            echo       winget 설치 실패, 수동 다운로드를 시도합니다...
+        )
+    )
+
+    :: winget 실패 시 직접 다운로드
+    if not defined FFMPEG_INSTALLED (
+        echo       FFmpeg를 직접 다운로드합니다...
+
+        :: tools 폴더에 ffmpeg 다운로드
+        if not exist "tools" mkdir tools
+        if not exist "tools\ffmpeg" mkdir tools\ffmpeg
+
+        :: PowerShell로 다운로드 및 압축 해제
+        powershell -Command "& { $ProgressPreference='SilentlyContinue'; try { Invoke-WebRequest -Uri 'https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip' -OutFile 'tools\ffmpeg.zip' -UseBasicParsing; Expand-Archive -Path 'tools\ffmpeg.zip' -DestinationPath 'tools\ffmpeg' -Force; Remove-Item 'tools\ffmpeg.zip' -Force; Write-Host 'Download successful' } catch { Write-Host 'Download failed'; exit 1 } }"
+
+        if exist "tools\ffmpeg\ffmpeg-master-latest-win64-gpl\bin\ffmpeg.exe" (
+            echo       FFmpeg 다운로드 완료!
+
+            :: PATH에 추가 (현재 세션)
+            set "PATH=%~dp0tools\ffmpeg\ffmpeg-master-latest-win64-gpl\bin;%PATH%"
+            echo       현재 세션에 FFmpeg 경로 추가됨
+
+            :: 시스템 PATH에 영구 추가 여부 확인
+            echo.
+            echo       [선택] FFmpeg를 시스템 PATH에 영구적으로 추가하시겠습니까?
+            echo       (다음 실행부터 자동으로 FFmpeg를 찾을 수 있습니다)
+            choice /C YN /M "       영구 추가"
+            if not errorlevel 2 (
+                setx PATH "%~dp0tools\ffmpeg\ffmpeg-master-latest-win64-gpl\bin;%PATH%" >nul 2>&1
+                echo       시스템 PATH에 추가됨
+            )
+        ) else (
+            echo       [경고] FFmpeg 다운로드 실패
+            echo       수동으로 설치해주세요: https://ffmpeg.org/download.html
+            echo       또는: choco install ffmpeg
+            echo.
+            echo       FFmpeg 없이도 실행은 가능하지만 한국어 TTS가 작동하지 않을 수 있습니다.
+            timeout /t 5 /nobreak >nul
+        )
+    )
 ) else (
     echo       FFmpeg 확인 완료
 )
