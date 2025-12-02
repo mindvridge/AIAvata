@@ -115,7 +115,7 @@ echo [6/6] 서버 시작 중...
 echo.
 echo ============================================================
 echo   백엔드 API:  http://localhost:8000
-echo   프론트엔드:   http://localhost:5173
+echo   프론트엔드:   http://localhost:3000
 echo   API 문서:    http://localhost:8000/docs
 echo   종료: 이 창을 닫으세요
 echo ============================================================
@@ -125,8 +125,8 @@ echo.
 start "Frontend - AI Avatar" cmd /c "cd /d %~dp0frontend && npm run dev"
 
 :: 잠시 대기 후 브라우저 열기
-timeout /t 3 /nobreak >nul
-start http://localhost:5173
+timeout /t 5 /nobreak >nul
+start http://localhost:3000
 
 :: 백엔드 실행 (현재 창)
 python -m uvicorn src.main:app --host 0.0.0.0 --port 8000 --reload
