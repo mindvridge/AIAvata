@@ -121,8 +121,8 @@ echo   종료: 이 창을 닫으세요
 echo ============================================================
 echo.
 
-:: 프론트엔드를 새 창에서 실행
-start "Frontend - AI Avatar" cmd /c "cd /d %~dp0frontend && npm run dev"
+:: 프론트엔드를 새 창에서 실행 (오류 시에도 창 유지)
+start "Frontend - AI Avatar" cmd /k "cd /d %~dp0frontend && npm run dev"
 
 :: 잠시 대기 후 브라우저 열기
 timeout /t 5 /nobreak >nul
