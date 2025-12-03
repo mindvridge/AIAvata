@@ -157,15 +157,6 @@ if %HAS_NVIDIA%==1 (
 echo.
 echo [5/10] 백엔드 패키지 확인 중...
 
-:: NumPy 2.x 호환성 체크 (mediapipe/matplotlib 문제)
-python -c "import numpy; exit(0 if int(numpy.__version__.split('.')[0]) < 2 else 1)" 2>nul
-if errorlevel 1 (
-    echo       NumPy 2.x 감지됨, 1.x로 다운그레이드 중...
-    pip uninstall numpy -y >nul 2>&1
-    pip install "numpy>=1.24.0,<2.0" -q
-    echo       NumPy 다운그레이드 완료!
-)
-
 :: Zonos TTS 설치 확인
 python -c "import zonos" 2>nul
 if errorlevel 1 (
@@ -188,7 +179,6 @@ if errorlevel 1 (
     )
 
     pip install fastapi uvicorn python-dotenv websockets aiofiles pydantic -q
-    pip install "numpy>=1.24.0,<2.0" -q
     pip install "protobuf>=3.20,<5.0" -q
 
     pip uninstall opencv-python opencv-contrib-python -y 2>nul
@@ -210,6 +200,21 @@ if errorlevel 1 (
         pip install torch torchaudio torchvision --index-url https://download.pytorch.org/whl/cu121 -q
         echo       CUDA PyTorch 업그레이드 완료!
     )
+)
+
+:: ============================================================
+:: 5.5 NumPy 호환성 강제 적용 (mediapipe/matplotlib 문제)
+:: ============================================================
+echo.
+echo [5.5/10] NumPy 호환성 확인 중...
+python -c "import numpy; v=numpy.__version__; exit(0 if int(v.split('.')[0]) < 2 else 1)" 2>nul
+if errorlevel 1 (
+    echo       NumPy 2.x 감지됨, 1.x로 강제 다운그레이드 중...
+    pip uninstall numpy -y >nul 2>&1
+    pip install "numpy>=1.24.0,<2.0" --force-reinstall -q
+    echo       NumPy 다운그레이드 완료!
+) else (
+    echo       NumPy 호환성 확인됨
 )
 
 :: ============================================================
