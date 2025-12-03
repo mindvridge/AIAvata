@@ -163,20 +163,85 @@ if errorlevel 1 (
     echo       Zonos TTS 설치 중...
 
     :: eSpeak-ng 확인 (Zonos 필수 의존성)
+    set "ESPEAK_FOUND=0"
+
+    :: 방법 1: PATH에서 espeak-ng 확인
     where espeak-ng >nul 2>&1
-    if errorlevel 1 (
+    if not errorlevel 1 set "ESPEAK_FOUND=1"
+
+    :: 방법 2: 기본 설치 경로 확인
+    if exist "C:\Program Files\eSpeak NG\espeak-ng.exe" (
+        set "ESPEAK_FOUND=1"
+        set "PATH=C:\Program Files\eSpeak NG;%PATH%"
+    )
+    if exist "C:\Program Files (x86)\eSpeak NG\espeak-ng.exe" (
+        set "ESPEAK_FOUND=1"
+        set "PATH=C:\Program Files (x86)\eSpeak NG;%PATH%"
+    )
+
+    if %ESPEAK_FOUND%==0 (
         echo       [참고] eSpeak-ng가 필요합니다. 자동 설치를 시도합니다...
 
-        :: winget으로 설치 시도
-        winget install eSpeak-NG.eSpeak-NG --accept-source-agreements --accept-package-agreements -h 2>nul
-        if errorlevel 1 (
-            echo       [경고] eSpeak-ng 자동 설치 실패.
-            echo       수동 설치: https://github.com/espeak-ng/espeak-ng/releases
-            echo       Zonos TTS 없이 계속 진행합니다.
+        :: 방법 1: winget으로 설치 시도
+        winget --version >nul 2>&1
+        if not errorlevel 1 (
+            echo       winget으로 eSpeak-ng 설치 시도...
+            winget install eSpeak-NG.eSpeak-NG --accept-source-agreements --accept-package-agreements -h >nul 2>&1
+            if not errorlevel 1 (
+                echo       eSpeak-ng winget 설치 완료!
+                set "PATH=C:\Program Files\eSpeak NG;%PATH%"
+                goto espeak_done
+            )
+        )
+
+        :: 방법 2: GitHub에서 직접 다운로드 및 설치
+        echo       GitHub에서 eSpeak-ng 다운로드 중...
+        if not exist "tools" mkdir tools
+
+        :: 최신 릴리즈 MSI 다운로드 (x64)
+        curl -L -o "tools\espeak-ng.msi" "https://github.com/espeak-ng/espeak-ng/releases/download/1.51/espeak-ng-X64.msi" --progress-bar
+
+        if exist "tools\espeak-ng.msi" (
+            echo       eSpeak-ng 설치 중... (관리자 권한 필요할 수 있음)
+
+            :: 사일런트 설치 시도
+            msiexec /i "tools\espeak-ng.msi" /quiet /norestart 2>nul
+
+            :: 설치 확인
+            timeout /t 3 /nobreak >nul
+            if exist "C:\Program Files\eSpeak NG\espeak-ng.exe" (
+                set "PATH=C:\Program Files\eSpeak NG;%PATH%"
+                echo       eSpeak-ng 설치 완료!
+                del "tools\espeak-ng.msi" 2>nul
+            ) else if exist "C:\Program Files (x86)\eSpeak NG\espeak-ng.exe" (
+                set "PATH=C:\Program Files (x86)\eSpeak NG;%PATH%"
+                echo       eSpeak-ng 설치 완료!
+                del "tools\espeak-ng.msi" 2>nul
+            ) else (
+                echo       [참고] 자동 설치 실패. 수동 설치를 시도합니다...
+                echo       tools\espeak-ng.msi 파일을 더블클릭하여 설치해주세요.
+                start "" "tools\espeak-ng.msi"
+                echo       설치 완료 후 Enter를 눌러주세요...
+                pause >nul
+
+                :: 설치 후 재확인
+                if exist "C:\Program Files\eSpeak NG\espeak-ng.exe" (
+                    set "PATH=C:\Program Files\eSpeak NG;%PATH%"
+                ) else if exist "C:\Program Files (x86)\eSpeak NG\espeak-ng.exe" (
+                    set "PATH=C:\Program Files (x86)\eSpeak NG;%PATH%"
+                ) else (
+                    echo       [경고] eSpeak-ng 설치를 확인할 수 없습니다.
+                    echo       Zonos TTS 없이 계속 진행합니다.
+                    goto skip_zonos
+                )
+            )
+        ) else (
+            echo       [경고] eSpeak-ng 다운로드 실패. Zonos TTS를 건너뜁니다.
             goto skip_zonos
         )
-        echo       eSpeak-ng 설치 완료!
     )
+    :espeak_done
+    echo       eSpeak-ng 확인됨
 
     :: Zonos GitHub에서 클론 및 설치
     if not exist "external\Zonos" (
@@ -187,6 +252,11 @@ if errorlevel 1 (
     )
 
     if exist "external\Zonos\setup.py" (
+        echo       Zonos 설치 중... (약 2-3분 소요)
+        pip install pydub -q
+        pip install -e external\Zonos -q
+        echo       Zonos TTS 설치 완료!
+    ) else if exist "external\Zonos\pyproject.toml" (
         echo       Zonos 설치 중... (약 2-3분 소요)
         pip install pydub -q
         pip install -e external\Zonos -q
