@@ -478,56 +478,81 @@ if not exist "models\musetalk\sd-vae-ft-mse\config.json" (
 
 :: Face-parse-bisent 모델 경로 설정 (MuseTalk이 ./models/face-parse-bisent 경로 기대)
 :: 두 파일 모두 필요: resnet18-5c106cde.pth, 79999_iter.pth
+call :download_face_parser
+goto after_face_parser
+
+:download_face_parser
 :: 디렉토리 생성
 if not exist "models\face-parse-bisent" mkdir "models\face-parse-bisent"
 
 :: 파일 검증 (손상된 파일 삭제)
 if exist "models\face-parse-bisent\79999_iter.pth" (
-    python -c "import torch; torch.load('models/face-parse-bisent/79999_iter.pth', map_location='cpu')" 2>nul
+    python -c "import torch; torch.load('models/face-parse-bisent/79999_iter.pth', map_location='cpu', weights_only=True)" 2>nul
     if errorlevel 1 (
         echo       [경고] 79999_iter.pth 손상 감지, 삭제 후 재다운로드...
         del "models\face-parse-bisent\79999_iter.pth" 2>nul
+    ) else (
+        echo       Face parser 모델 확인됨 (검증 완료)
+        exit /b
     )
 )
 
-set "NEED_FP_DOWNLOAD=0"
-if not exist "models\face-parse-bisent\resnet18-5c106cde.pth" set "NEED_FP_DOWNLOAD=1"
-if not exist "models\face-parse-bisent\79999_iter.pth" set "NEED_FP_DOWNLOAD=1"
-
-if %NEED_FP_DOWNLOAD%==1 (
-    echo       Face parser 모델 설정 중...
-
-    :: resnet18 다운로드 (없으면)
-    if not exist "models\face-parse-bisent\resnet18-5c106cde.pth" (
-        echo       resnet18 모델 다운로드 중...
-        curl -L -o "models\face-parse-bisent\resnet18-5c106cde.pth" "https://download.pytorch.org/models/resnet18-5c106cde.pth" --progress-bar
-    )
-
-    :: 79999_iter.pth 다운로드 (없으면)
-    if not exist "models\face-parse-bisent\79999_iter.pth" (
-        echo       79999_iter.pth 모델 다운로드 중...
-
-        :: 방법 1: MuseTalk HF repo에서 직접 다운로드 (huggingface_hub 사용)
-        python -c "from huggingface_hub import hf_hub_download; import shutil; import os; f=hf_hub_download(repo_id='TMElyralab/MuseTalk', filename='models/face-parse-bisent/79999_iter.pth'); os.makedirs('models/face-parse-bisent', exist_ok=True); shutil.copy(f, 'models/face-parse-bisent/79999_iter.pth'); print('Downloaded:', f)"
-    )
-
-    :: 다운로드 성공 검증
-    if exist "models\face-parse-bisent\79999_iter.pth" (
-        python -c "import torch; torch.load('models/face-parse-bisent/79999_iter.pth', map_location='cpu')" 2>nul
-        if errorlevel 1 (
-            echo       [경고] 다운로드된 파일 손상, 삭제 중...
-            del "models\face-parse-bisent\79999_iter.pth" 2>nul
-        ) else (
-            echo       Face parser 모델 설정 완료!
-        )
-    )
-
-    if not exist "models\face-parse-bisent\79999_iter.pth" (
-        echo       [경고] Face parser 모델 다운로드 실패. 립싱크 품질이 저하될 수 있습니다.
-    )
-) else (
-    echo       Face parser 모델 확인됨
+:: resnet18 다운로드 (없으면)
+if not exist "models\face-parse-bisent\resnet18-5c106cde.pth" (
+    echo       resnet18 모델 다운로드 중...
+    curl -L -o "models\face-parse-bisent\resnet18-5c106cde.pth" "https://download.pytorch.org/models/resnet18-5c106cde.pth" --progress-bar
 )
+
+:: 79999_iter.pth 다운로드 (없으면)
+if not exist "models\face-parse-bisent\79999_iter.pth" (
+    echo       79999_iter.pth 모델 다운로드 중...
+
+    :: 방법 1: MuseTalk HF repo에서 직접 다운로드 (huggingface_hub 사용)
+    echo       방법 1: HuggingFace Hub에서 다운로드...
+    python -c "from huggingface_hub import hf_hub_download; import shutil; import os; f=hf_hub_download(repo_id='TMElyralab/MuseTalk', filename='models/face-parse-bisent/79999_iter.pth'); os.makedirs('models/face-parse-bisent', exist_ok=True); shutil.copy(f, 'models/face-parse-bisent/79999_iter.pth'); print('Downloaded:', f)" 2>nul
+)
+
+:: 방법 1 실패 시 - 방법 2: 직접 URL 다운로드
+if not exist "models\face-parse-bisent\79999_iter.pth" (
+    echo       방법 2: HuggingFace 직접 URL에서 다운로드...
+    curl -L -o "models\face-parse-bisent\79999_iter.pth" "https://huggingface.co/TMElyralab/MuseTalk/resolve/main/models/face-parse-bisent/79999_iter.pth" --progress-bar
+)
+
+:: 방법 2 실패 시 - 방법 3: 이미 다운로드된 musetalk 폴더에서 복사
+if not exist "models\face-parse-bisent\79999_iter.pth" (
+    if exist "models\musetalk\face-parse-bisent\79999_iter.pth" (
+        echo       방법 3: 기존 MuseTalk 폴더에서 복사...
+        copy "models\musetalk\face-parse-bisent\79999_iter.pth" "models\face-parse-bisent\79999_iter.pth" >nul
+    )
+)
+
+:: 방법 3 실패 시 - 방법 4: HF 다운로드 폴더에서 복사
+if not exist "models\face-parse-bisent\79999_iter.pth" (
+    if exist "models\musetalk\hf_download\models\face-parse-bisent\79999_iter.pth" (
+        echo       방법 4: HF 다운로드 폴더에서 복사...
+        copy "models\musetalk\hf_download\models\face-parse-bisent\79999_iter.pth" "models\face-parse-bisent\79999_iter.pth" >nul
+    )
+)
+
+:: 다운로드 성공 검증
+if exist "models\face-parse-bisent\79999_iter.pth" (
+    python -c "import torch; torch.load('models/face-parse-bisent/79999_iter.pth', map_location='cpu', weights_only=True)" 2>nul
+    if errorlevel 1 (
+        echo       [경고] 다운로드된 파일 손상, 삭제 중...
+        del "models\face-parse-bisent\79999_iter.pth" 2>nul
+    ) else (
+        echo       Face parser 모델 설정 완료!
+        exit /b
+    )
+)
+
+if not exist "models\face-parse-bisent\79999_iter.pth" (
+    echo       [경고] Face parser 모델 다운로드 실패. 립싱크 품질이 저하될 수 있습니다.
+    echo       수동 다운로드: https://huggingface.co/TMElyralab/MuseTalk/tree/main/models/face-parse-bisent
+)
+exit /b
+
+:after_face_parser
 
 :: ============================================================
 :: 6.5 LivePortrait 설치 (Idle 애니메이션)
