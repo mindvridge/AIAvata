@@ -8,7 +8,7 @@ pydantic-settings>=2.0.0
 # ML/DL
 torch>=2.0.0
 torchaudio>=2.0.0
-numpy>=1.24.0
+numpy>=1.24.0,<2.0.0  # mediapipe, matplotlib requires numpy<2
 opencv-python>=4.8.0
 
 # MuseTalk Dependencies
@@ -21,26 +21,18 @@ einops>=0.7.0
 funasr>=1.0.0
 modelscope>=1.9.0
 
-# TTS (Chatterbox)
-# chatterbox-tts는 PyPI에 없음. GitHub에서 직접 설치 필요:
-# pip install git+https://github.com/resemble-ai/chatterbox.git
-# 또는 edge-tts를 대안으로 사용
-edge-tts>=6.1.0
+# TTS (Zonos - Voice Cloning)
+zonos>=0.1.0
+pydub>=0.25.0  # Audio format conversion
 
-# Face Detection (InsightFace 대체 - 상업적 라이선스)
+# Face Detection
 mediapipe>=0.10.0
-
-# VAD (Silero VAD - PyPI 패키지가 아닌 torch hub에서 로드)
-# torch.hub.load('snakers4/silero-vad', 'silero_vad')
-# 직접 설치가 필요한 경우: pip install -U silero
-# silero는 별도 패키지가 없으며 torch에 의존
 
 # WebRTC
 livekit>=0.10.0
 livekit-api>=0.5.0
 
 # LLM
-anthropic>=0.18.0
 openai>=1.0.0
 
 # Async utilities

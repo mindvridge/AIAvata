@@ -9,28 +9,31 @@ uvicorn[standard]>=0.23.0
 python-dotenv>=1.0.0
 pydantic>=2.0.0
 pydantic-settings>=2.0.0
-numpy>=1.24.0
+numpy>=1.24.0,<2.0.0  # mediapipe, matplotlib requires numpy<2
 opencv-python>=4.8.0
+
+# MuseTalk Dependencies
+diffusers>=0.27.0
+transformers>=4.36.0
+accelerate>=0.25.0
+einops>=0.7.0
 
 # STT (SenseVoice)
 funasr>=1.0.0
 modelscope>=1.9.0
 
-# TTS (Chatterbox)
-chatterbox-tts>=0.1.0
+# TTS (Zonos - Voice Cloning)
+zonos>=0.1.0
+pydub>=0.25.0
 
-# Face Detection (InsightFace 대체 - 상업적 라이선스)
+# Face Detection
 mediapipe>=0.10.0
-
-# VAD
-silero-vad>=4.0.0
 
 # WebRTC
 livekit>=0.10.0
 livekit-api>=0.5.0
 
 # LLM
-anthropic>=0.18.0
 openai>=1.0.0
 
 # Async utilities
@@ -58,4 +61,3 @@ httpx>=0.25.0
 black>=23.0.0
 ruff>=0.1.0
 mypy>=1.0.0
-

@@ -370,14 +370,44 @@ echo   종료: 이 창을 닫으세요
 echo ============================================================
 echo.
 
-:: 프론트엔드를 새 창에서 실행 (오류 시에도 창 유지)
+:: 백엔드를 새 창에서 실행
+start "Backend - AI Avatar" cmd /k "cd /d %~dp0 && python -m uvicorn src.main:app --host 0.0.0.0 --port 8000 --reload"
+
+:: 백엔드 서버가 준비될 때까지 대기
+echo       백엔드 서버 초기화 대기 중...
+:wait_backend
+timeout /t 2 /nobreak >nul
+curl -s http://localhost:8000/health >nul 2>&1
+if errorlevel 1 (
+    echo       ... 백엔드 초기화 중 ...
+    goto wait_backend
+)
+echo       백엔드 서버 준비 완료!
+
+:: 프론트엔드를 새 창에서 실행
 start "Frontend - AI Avatar" cmd /k "cd /d %~dp0frontend && npm run dev"
 
-:: 잠시 대기 후 브라우저 열기
-timeout /t 5 /nobreak >nul
+:: 프론트엔드 서버가 준비될 때까지 대기
+echo       프론트엔드 서버 초기화 대기 중...
+:wait_frontend
+timeout /t 2 /nobreak >nul
+curl -s http://localhost:5173 >nul 2>&1
+if errorlevel 1 (
+    echo       ... 프론트엔드 초기화 중 ...
+    goto wait_frontend
+)
+echo       프론트엔드 서버 준비 완료!
+
+:: 모든 서버 준비 후 브라우저 열기
+echo.
+echo [10/10] 브라우저 열기...
 start http://localhost:5173
 
-:: 백엔드 실행 (현재 창)
-python -m uvicorn src.main:app --host 0.0.0.0 --port 8000 --reload
-
+echo.
+echo ============================================================
+echo   모든 서비스가 시작되었습니다!
+echo   브라우저가 자동으로 열렸습니다.
+echo   종료하려면 이 창과 서버 창들을 닫으세요.
+echo ============================================================
+echo.
 pause
