@@ -157,6 +157,14 @@ if %HAS_NVIDIA%==1 (
 echo.
 echo [5/10] 백엔드 패키지 확인 중...
 
+:: eSpeak-ng 항상 확인 및 설치 (Zonos TTS 필수 의존성)
+call :check_espeak
+if "%ESPEAK_OK%"=="1" (
+    echo       eSpeak-ng 확인됨
+) else (
+    echo       [경고] eSpeak-ng 설치 실패. Zonos TTS가 작동하지 않을 수 있습니다.
+)
+
 :: Zonos TTS 설치 확인
 python -c "import zonos" 2>nul
 if errorlevel 1 (
@@ -167,10 +175,9 @@ goto after_zonos
 :install_zonos
 echo       Zonos TTS 설치 중...
 
-:: eSpeak-ng 확인 (Zonos 필수 의존성)
-call :check_espeak
+:: eSpeak-ng 재확인
 if "%ESPEAK_OK%"=="0" (
-    echo       [경고] eSpeak-ng 설치 실패. Zonos TTS를 건너뜁니다.
+    echo       [경고] eSpeak-ng 없이 Zonos 설치를 건너뜁니다.
     exit /b
 )
 
