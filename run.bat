@@ -169,6 +169,9 @@ python -c "import torch,openai,livekit,cv2,mediapipe" 2>nul
 if errorlevel 1 (
     echo       패키지 설치 중... (최초 1회, 약 5-10분 소요)
 
+    :: NumPy 1.x 버전 먼저 설치 (다른 패키지가 NumPy 2.x 설치하지 않도록)
+    pip install numpy==1.26.4 --no-cache-dir -q
+
     :: PyTorch 설치 (GPU/CPU 자동 선택)
     if %HAS_NVIDIA%==1 (
         echo       CUDA PyTorch 설치 중... (약 2GB 다운로드)
@@ -188,7 +191,7 @@ if errorlevel 1 (
     pip install transformers diffusers huggingface_hub -q
     pip install funasr modelscope omegaconf kaldiio -q
     pip install zonos pydub -q
-    pip install mediapipe librosa einops -q
+    pip install mediapipe librosa einops --no-cache-dir -q
 
     echo       패키지 설치 완료!
 ) else (
@@ -203,15 +206,15 @@ if errorlevel 1 (
 )
 
 :: ============================================================
-:: 5.5 NumPy 호환성 강제 적용 (mediapipe/matplotlib 문제)
+:: 5.5 NumPy 1차 호환성 적용 (mediapipe/matplotlib 문제)
 :: ============================================================
 echo.
 echo [5.5/10] NumPy 호환성 확인 중...
 python -c "import numpy; v=numpy.__version__; exit(0 if int(v.split('.')[0]) < 2 else 1)" 2>nul
 if errorlevel 1 (
-    echo       NumPy 2.x 감지됨, 1.x로 강제 다운그레이드 중...
+    echo       NumPy 2.x 감지됨, 1.x로 다운그레이드 중...
     pip uninstall numpy -y >nul 2>&1
-    pip install "numpy>=1.24.0,<2.0" --force-reinstall -q
+    pip install numpy==1.26.4 --no-cache-dir -q
     echo       NumPy 다운그레이드 완료!
 ) else (
     echo       NumPy 호환성 확인됨
@@ -246,6 +249,9 @@ python -c "import mmcv" 2>nul
 if errorlevel 1 (
     echo       MuseTalk 의존성 설치 중... (약 5분 소요)
 
+    :: NumPy 1.x 버전 고정 (mmcv가 NumPy 2.x 설치 방지)
+    pip install numpy==1.26.4 --no-cache-dir -q
+
     :: mmcv, mmdet, mmpose 설치 (MuseTalk 필수 의존성)
     pip install openmim -q
     mim install mmengine -q
@@ -254,8 +260,8 @@ if errorlevel 1 (
     mim install "mmpose>=1.0.0" -q
 
     :: MuseTalk 추가 의존성
-    pip install face-alignment dlib -q
-    pip install kornia yacs einops -q
+    pip install face-alignment dlib --no-cache-dir -q
+    pip install kornia yacs einops --no-cache-dir -q
 
     echo       MuseTalk 의존성 설치 완료!
 ) else (
@@ -402,8 +408,10 @@ if not exist "external\LivePortrait\src" (
 python -c "import onnxruntime" 2>nul
 if errorlevel 1 (
     echo       LivePortrait 의존성 설치 중...
-    pip install onnxruntime-gpu onnx -q
-    pip install tyro rich tqdm -q
+    :: NumPy 1.x 버전 고정 (onnxruntime가 NumPy 2.x 설치 방지)
+    pip install numpy==1.26.4 --no-cache-dir -q
+    pip install onnxruntime-gpu onnx --no-cache-dir -q
+    pip install tyro rich tqdm --no-cache-dir -q
     echo       LivePortrait 의존성 설치 완료!
 )
 
@@ -463,6 +471,29 @@ if not exist "frontend\.env" (
     )
 )
 echo       환경 설정 확인 완료
+
+:: ============================================================
+:: 8.5 NumPy 최종 호환성 강제 적용 (모든 패키지 설치 후)
+:: ============================================================
+echo.
+echo [8.5/10] NumPy 최종 호환성 강제 적용 중...
+python -c "import numpy; v=numpy.__version__; exit(0 if int(v.split('.')[0]) < 2 else 1)" 2>nul
+if errorlevel 1 (
+    echo       [!] NumPy 2.x가 다시 설치됨, 최종 강제 다운그레이드 중...
+    pip uninstall numpy -y >nul 2>&1
+    pip cache purge >nul 2>&1
+    pip install numpy==1.26.4 --no-cache-dir --force-reinstall -q
+
+    :: 의존성 패키지도 재컴파일 (NumPy 헤더 호환성)
+    echo       mediapipe/matplotlib 재설치 중...
+    pip uninstall mediapipe -y >nul 2>&1
+    pip install mediapipe --no-cache-dir -q
+
+    python -c "import numpy; print(f'       NumPy 버전: {numpy.__version__}')"
+    echo       NumPy 호환성 강제 적용 완료!
+) else (
+    python -c "import numpy; print(f'       NumPy 버전: {numpy.__version__} [호환]')"
+)
 
 :: ============================================================
 :: 9. 서버 실행 (백엔드 + 프론트엔드)
