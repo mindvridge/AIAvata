@@ -687,12 +687,13 @@ set "ESPEAK_PATH="
 if exist "C:\Program Files\eSpeak NG\espeak-ng.exe" set "ESPEAK_PATH=C:\Program Files\eSpeak NG"
 if exist "C:\Program Files (x86)\eSpeak NG\espeak-ng.exe" set "ESPEAK_PATH=C:\Program Files (x86)\eSpeak NG"
 
-:: 백엔드를 새 창에서 실행 (eSpeak-ng PATH 포함)
+:: 백엔드를 새 창에서 실행 (eSpeak-ng PATH 포함, torch.compile 비활성화)
+:: TORCHDYNAMO_DISABLE=1: Windows에서 Triton 경고 방지
 if defined ESPEAK_PATH (
-    start "Backend - AI Avatar" cmd /k "cd /d %~dp0 && set PATH=%ESPEAK_PATH%;%PATH% && set PHONEMIZER_ESPEAK_LIBRARY=%ESPEAK_PATH%\libespeak-ng.dll && python -m uvicorn src.main:app --host 0.0.0.0 --port 8000 --reload"
+    start "Backend - AI Avatar" cmd /k "cd /d %~dp0 && set PATH=%ESPEAK_PATH%;%PATH% && set PHONEMIZER_ESPEAK_LIBRARY=%ESPEAK_PATH%\libespeak-ng.dll && set TORCHDYNAMO_DISABLE=1 && python -m uvicorn src.main:app --host 0.0.0.0 --port 8000 --reload"
 ) else (
     echo       [경고] eSpeak-ng가 설치되지 않았습니다. Zonos TTS가 작동하지 않을 수 있습니다.
-    start "Backend - AI Avatar" cmd /k "cd /d %~dp0 && python -m uvicorn src.main:app --host 0.0.0.0 --port 8000 --reload"
+    start "Backend - AI Avatar" cmd /k "cd /d %~dp0 && set TORCHDYNAMO_DISABLE=1 && python -m uvicorn src.main:app --host 0.0.0.0 --port 8000 --reload"
 )
 
 :: 백엔드 서버가 준비될 때까지 대기
