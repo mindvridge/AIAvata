@@ -331,16 +331,43 @@ if not exist "models\musetalk\sd-vae-ft-mse\config.json" (
 )
 
 :: Face-parse-bisent 모델 경로 설정 (MuseTalk이 ./models/face-parse-bisent 경로 기대)
-if not exist "models\face-parse-bisent" (
-    if exist "models\musetalk\face-parse-bisent" (
-        echo       Face parser 모델 링크 생성 중...
-        mklink /D "models\face-parse-bisent" "musetalk\face-parse-bisent" >nul 2>&1
-        if errorlevel 1 (
-            :: 심볼릭 링크 실패시 복사
-            xcopy "models\musetalk\face-parse-bisent\*" "models\face-parse-bisent\" /s /e /y >nul 2>nul
-        )
-        echo       Face parser 모델 경로 설정 완료!
+if not exist "models\face-parse-bisent\resnet18-5c106cde.pth" (
+    echo       Face parser 모델 설정 중...
+
+    :: 소스 폴더 확인 (여러 가능한 경로)
+    set "FP_SOURCE="
+    if exist "models\musetalk\face-parse-bisent\resnet18-5c106cde.pth" (
+        set "FP_SOURCE=models\musetalk\face-parse-bisent"
+    ) else if exist "models\musetalk\hf_download\models\face-parse-bisent\resnet18-5c106cde.pth" (
+        set "FP_SOURCE=models\musetalk\hf_download\models\face-parse-bisent"
+    ) else if exist "models\musetalk\hf_download\face-parse-bisent\resnet18-5c106cde.pth" (
+        set "FP_SOURCE=models\musetalk\hf_download\face-parse-bisent"
     )
+
+    if defined FP_SOURCE (
+        :: 디렉토리 생성 및 복사
+        if not exist "models\face-parse-bisent" mkdir "models\face-parse-bisent"
+        xcopy "%FP_SOURCE%\*" "models\face-parse-bisent\" /s /e /y >nul 2>nul
+        echo       Face parser 모델 복사 완료!
+    ) else (
+        :: 모델이 없으면 직접 다운로드
+        echo       Face parser 모델 다운로드 중...
+        if not exist "models\face-parse-bisent" mkdir "models\face-parse-bisent"
+
+        :: resnet18 다운로드
+        curl -L -o "models\face-parse-bisent\resnet18-5c106cde.pth" "https://download.pytorch.org/models/resnet18-5c106cde.pth" --progress-bar
+
+        :: 79999_iter.pth 다운로드 (HuggingFace에서)
+        python -c "from huggingface_hub import hf_hub_download; hf_hub_download(repo_id='TMElyralab/MuseTalk', filename='models/face-parse-bisent/79999_iter.pth', local_dir='models/face-parse-bisent-tmp'); import shutil; shutil.copy('models/face-parse-bisent-tmp/models/face-parse-bisent/79999_iter.pth', 'models/face-parse-bisent/79999_iter.pth')"
+
+        if exist "models\face-parse-bisent\79999_iter.pth" (
+            echo       Face parser 모델 다운로드 완료!
+        ) else (
+            echo       [경고] Face parser 모델 다운로드 실패. 립싱크 품질이 저하될 수 있습니다.
+        )
+    )
+) else (
+    echo       Face parser 모델 확인됨
 )
 
 :: ============================================================
