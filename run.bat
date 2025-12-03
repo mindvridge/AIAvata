@@ -161,9 +161,41 @@ echo [5/10] 백엔드 패키지 확인 중...
 python -c "import zonos" 2>nul
 if errorlevel 1 (
     echo       Zonos TTS 설치 중...
-    pip install zonos pydub -q
-    echo       Zonos TTS 설치 완료!
+
+    :: eSpeak-ng 확인 (Zonos 필수 의존성)
+    where espeak-ng >nul 2>&1
+    if errorlevel 1 (
+        echo       [참고] eSpeak-ng가 필요합니다. 자동 설치를 시도합니다...
+
+        :: winget으로 설치 시도
+        winget install eSpeak-NG.eSpeak-NG --accept-source-agreements --accept-package-agreements -h 2>nul
+        if errorlevel 1 (
+            echo       [경고] eSpeak-ng 자동 설치 실패.
+            echo       수동 설치: https://github.com/espeak-ng/espeak-ng/releases
+            echo       Zonos TTS 없이 계속 진행합니다.
+            goto skip_zonos
+        )
+        echo       eSpeak-ng 설치 완료!
+    )
+
+    :: Zonos GitHub에서 클론 및 설치
+    if not exist "external\Zonos" (
+        echo       Zonos 소스 다운로드 중...
+        cd external
+        git clone --depth 1 https://github.com/Zyphra/Zonos.git
+        cd ..
+    )
+
+    if exist "external\Zonos\setup.py" (
+        echo       Zonos 설치 중... (약 2-3분 소요)
+        pip install pydub -q
+        pip install -e external\Zonos -q
+        echo       Zonos TTS 설치 완료!
+    ) else (
+        echo       [경고] Zonos 설치 실패. TTS가 제한될 수 있습니다.
+    )
 )
+:skip_zonos
 
 python -c "import torch,openai,livekit,cv2,mediapipe" 2>nul
 if errorlevel 1 (
@@ -342,40 +374,41 @@ if not exist "models\musetalk\sd-vae-ft-mse\config.json" (
 )
 
 :: Face-parse-bisent 모델 경로 설정 (MuseTalk이 ./models/face-parse-bisent 경로 기대)
-if not exist "models\face-parse-bisent\resnet18-5c106cde.pth" (
+:: 두 파일 모두 필요: resnet18-5c106cde.pth, 79999_iter.pth
+set "NEED_FP_DOWNLOAD=0"
+if not exist "models\face-parse-bisent\resnet18-5c106cde.pth" set "NEED_FP_DOWNLOAD=1"
+if not exist "models\face-parse-bisent\79999_iter.pth" set "NEED_FP_DOWNLOAD=1"
+
+if %NEED_FP_DOWNLOAD%==1 (
     echo       Face parser 모델 설정 중...
 
-    :: 소스 폴더 확인 (여러 가능한 경로)
-    set "FP_SOURCE="
-    if exist "models\musetalk\face-parse-bisent\resnet18-5c106cde.pth" (
-        set "FP_SOURCE=models\musetalk\face-parse-bisent"
-    ) else if exist "models\musetalk\hf_download\models\face-parse-bisent\resnet18-5c106cde.pth" (
-        set "FP_SOURCE=models\musetalk\hf_download\models\face-parse-bisent"
-    ) else if exist "models\musetalk\hf_download\face-parse-bisent\resnet18-5c106cde.pth" (
-        set "FP_SOURCE=models\musetalk\hf_download\face-parse-bisent"
+    :: 디렉토리 생성
+    if not exist "models\face-parse-bisent" mkdir "models\face-parse-bisent"
+
+    :: resnet18 다운로드 (없으면)
+    if not exist "models\face-parse-bisent\resnet18-5c106cde.pth" (
+        echo       resnet18 모델 다운로드 중...
+        curl -L -o "models\face-parse-bisent\resnet18-5c106cde.pth" "https://download.pytorch.org/models/resnet18-5c106cde.pth" --progress-bar
     )
 
-    if defined FP_SOURCE (
-        :: 디렉토리 생성 및 복사
-        if not exist "models\face-parse-bisent" mkdir "models\face-parse-bisent"
-        xcopy "%FP_SOURCE%\*" "models\face-parse-bisent\" /s /e /y >nul 2>nul
-        echo       Face parser 모델 복사 완료!
-    ) else (
-        :: 모델이 없으면 직접 다운로드
-        echo       Face parser 모델 다운로드 중...
-        if not exist "models\face-parse-bisent" mkdir "models\face-parse-bisent"
+    :: 79999_iter.pth 다운로드 (없으면)
+    if not exist "models\face-parse-bisent\79999_iter.pth" (
+        echo       79999_iter.pth 모델 다운로드 중...
 
-        :: resnet18 다운로드
-        curl -L -o "models\face-parse-bisent\resnet18-5c106cde.pth" "https://download.pytorch.org/models/resnet18-5c106cde.pth" --progress-bar
+        :: 방법 1: MuseTalk HF repo에서 직접 다운로드
+        python -c "from huggingface_hub import hf_hub_download; import shutil; import os; f=hf_hub_download(repo_id='TMElyralab/MuseTalk', filename='models/face-parse-bisent/79999_iter.pth'); os.makedirs('models/face-parse-bisent', exist_ok=True); shutil.copy(f, 'models/face-parse-bisent/79999_iter.pth'); print('Downloaded:', f)"
 
-        :: 79999_iter.pth 다운로드 (HuggingFace에서)
-        python -c "from huggingface_hub import hf_hub_download; hf_hub_download(repo_id='TMElyralab/MuseTalk', filename='models/face-parse-bisent/79999_iter.pth', local_dir='models/face-parse-bisent-tmp'); import shutil; shutil.copy('models/face-parse-bisent-tmp/models/face-parse-bisent/79999_iter.pth', 'models/face-parse-bisent/79999_iter.pth')"
-
-        if exist "models\face-parse-bisent\79999_iter.pth" (
-            echo       Face parser 모델 다운로드 완료!
-        ) else (
-            echo       [경고] Face parser 모델 다운로드 실패. 립싱크 품질이 저하될 수 있습니다.
+        :: 방법 2: 실패 시 대체 URL 시도
+        if not exist "models\face-parse-bisent\79999_iter.pth" (
+            echo       대체 다운로드 시도 중...
+            curl -L -o "models\face-parse-bisent\79999_iter.pth" "https://huggingface.co/TMElyralab/MuseTalk/resolve/main/models/face-parse-bisent/79999_iter.pth" --progress-bar
         )
+    )
+
+    if exist "models\face-parse-bisent\79999_iter.pth" (
+        echo       Face parser 모델 설정 완료!
+    ) else (
+        echo       [경고] Face parser 모델 다운로드 실패. 립싱크 품질이 저하될 수 있습니다.
     )
 ) else (
     echo       Face parser 모델 확인됨

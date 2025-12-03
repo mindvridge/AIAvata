@@ -85,52 +85,67 @@ class LivePortraitModel:
             import torch
 
             # LivePortrait 소스 경로 확인
-            lp_src_path = Path(LIVE_PORTRAIT_SOURCE_DIR) / "src"
+            lp_base_path = Path(LIVE_PORTRAIT_SOURCE_DIR).resolve()
+            lp_src_path = lp_base_path / "src"
             if not lp_src_path.exists():
                 logger.warning(f"LivePortrait source not found: {lp_src_path}")
                 self._use_fallback = True
                 self._initialized = True
                 return True
 
-            # LivePortrait src를 Python 경로에 추가
-            if str(lp_src_path) not in sys.path:
-                sys.path.insert(0, str(lp_src_path))
-
             try:
-                # LivePortrait 모듈 임포트
-                from src.config.inference_config import InferenceConfig
-                from src.live_portrait_pipeline import LivePortraitPipeline
+                # LivePortrait 모듈 임포트 (sys.path 격리)
+                # 현재 sys.path 백업
+                original_path = sys.path.copy()
 
-                # 모델 경로 설정
-                model_config = {
-                    "checkpoint_F": str(self.model_dir / "base_models" / "appearance_feature_extractor.safetensors"),
-                    "checkpoint_M": str(self.model_dir / "base_models" / "motion_extractor.safetensors"),
-                    "checkpoint_G": str(self.model_dir / "base_models" / "spade_generator.safetensors"),
-                    "checkpoint_W": str(self.model_dir / "base_models" / "warping_module.safetensors"),
-                    "checkpoint_S": str(self.model_dir / "retargeting_models" / "stitching_retargeting_module.safetensors"),
-                }
+                # 프로젝트의 'src' 경로를 임시로 제거하고 LivePortrait 경로 추가
+                project_src = str(Path(__file__).parent.parent.parent.parent.resolve())
+                sys.path = [p for p in sys.path if not p.startswith(project_src) or 'external' in p]
+                sys.path.insert(0, str(lp_base_path))
 
-                # 모델 파일 확인
-                models_exist = all(Path(p).exists() for p in model_config.values())
+                try:
+                    # LivePortrait 모듈 임포트
+                    from src.config.inference_config import InferenceConfig
+                    from src.live_portrait_pipeline import LivePortraitPipeline
 
-                if not models_exist:
-                    logger.warning("LivePortrait model files not found. Using fallback.")
-                    self._use_fallback = True
-                    self._initialized = True
-                    return True
+                    # 임포트 성공 후 sys.path 복원
+                    sys.path = original_path
 
-                # 설정 및 파이프라인 초기화
-                inference_cfg = InferenceConfig(
-                    device_id=0 if self.device == "cuda" else -1,
-                    flag_force_cpu=self.device != "cuda",
-                )
+                    # 모델 경로 설정
+                    model_config = {
+                        "checkpoint_F": str(self.model_dir / "base_models" / "appearance_feature_extractor.safetensors"),
+                        "checkpoint_M": str(self.model_dir / "base_models" / "motion_extractor.safetensors"),
+                        "checkpoint_G": str(self.model_dir / "base_models" / "spade_generator.safetensors"),
+                        "checkpoint_W": str(self.model_dir / "base_models" / "warping_module.safetensors"),
+                        "checkpoint_S": str(self.model_dir / "retargeting_models" / "stitching_retargeting_module.safetensors"),
+                    }
 
-                self._pipeline = LivePortraitPipeline(
-                    inference_cfg=inference_cfg,
-                    crop_cfg=None,
-                )
+                    # 모델 파일 확인
+                    models_exist = all(Path(p).exists() for p in model_config.values())
 
-                logger.info("LivePortrait pipeline initialized successfully")
+                    if not models_exist:
+                        logger.warning("LivePortrait model files not found. Using fallback.")
+                        self._use_fallback = True
+                        self._initialized = True
+                        return True
+
+                    # 설정 및 파이프라인 초기화
+                    inference_cfg = InferenceConfig(
+                        device_id=0 if self.device == "cuda" else -1,
+                        flag_force_cpu=self.device != "cuda",
+                    )
+
+                    self._pipeline = LivePortraitPipeline(
+                        inference_cfg=inference_cfg,
+                        crop_cfg=None,
+                    )
+
+                    logger.info("LivePortrait pipeline initialized successfully")
+
+                except ImportError as e:
+                    # 임포트 실패 시에도 sys.path 복원
+                    sys.path = original_path
+                    raise e
 
             except ImportError as e:
                 logger.warning(f"Failed to import LivePortrait modules: {e}")
