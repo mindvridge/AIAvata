@@ -113,6 +113,13 @@ class ZonosTTSModel:
             # Zonos 모델 로드
             try:
                 import torch
+
+                # torch.compile() 비활성화 (Windows에서 C++ 컴파일러 없이 실행)
+                # 이렇게 하면 eager mode로 실행되어 약간 느리지만 작동함
+                import torch._dynamo
+                torch._dynamo.config.suppress_errors = True
+                torch._dynamo.disable()
+
                 from zonos.model import Zonos
 
                 self._model = Zonos.from_pretrained(self.model_name, device=self.device)
