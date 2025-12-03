@@ -7,12 +7,14 @@ echo ============================================================
 echo            AI Avatar Service - Windows
 echo ============================================================
 echo.
+echo [TIP] If you see permission errors, close other Python programs first.
+echo.
 
 cd /d "%~dp0"
 
-:: ============================================================
-:: 1. Python 확인
-:: ============================================================
+REM ============================================================
+REM 1. Python check
+REM ============================================================
 echo [1/10] Python 확인 중...
 python --version >nul 2>&1
 if errorlevel 1 (
@@ -23,9 +25,9 @@ if errorlevel 1 (
 )
 echo       Python 확인 완료
 
-:: ============================================================
-:: 2. Node.js 확인
-:: ============================================================
+REM ============================================================
+REM 2. Node.js check
+REM ============================================================
 echo.
 echo [2/10] Node.js 확인 중...
 node --version >nul 2>&1
@@ -37,9 +39,9 @@ if errorlevel 1 (
 )
 echo       Node.js 확인 완료
 
-:: ============================================================
-:: 3. Git 확인
-:: ============================================================
+REM ============================================================
+REM 3. Git check
+REM ============================================================
 echo.
 echo [3/10] Git 확인 중...
 git --version >nul 2>&1
@@ -51,13 +53,13 @@ if errorlevel 1 (
 )
 echo       Git 확인 완료
 
-:: ============================================================
-:: 3.5. FFmpeg 확인 및 자동 설치 (edge-tts MP3 변환용)
-:: ============================================================
+REM ============================================================
+REM 3.5. FFmpeg check and auto-install (for edge-tts MP3 conversion)
+REM ============================================================
 echo.
 echo [3.5/10] FFmpeg 확인 중...
 
-:: 로컬 설치된 FFmpeg 경로 확인 (이미 다운로드된 경우 스킵)
+REM Check local FFmpeg path (skip if already downloaded)
 set "LOCAL_FFMPEG=%~dp0tools\ffmpeg\ffmpeg-master-latest-win64-gpl\bin\ffmpeg.exe"
 if exist "%LOCAL_FFMPEG%" (
     set "PATH=%~dp0tools\ffmpeg\ffmpeg-master-latest-win64-gpl\bin;%PATH%"
@@ -65,17 +67,17 @@ if exist "%LOCAL_FFMPEG%" (
     goto ffmpeg_done
 )
 
-:: 시스템 FFmpeg 확인
+REM Check system FFmpeg
 ffmpeg -version >nul 2>&1
 if not errorlevel 1 (
     echo       FFmpeg 확인 완료
     goto ffmpeg_done
 )
 
-:: FFmpeg가 없으면 설치
+REM Install FFmpeg if not found
 echo       FFmpeg가 설치되어 있지 않습니다. 자동 설치를 시도합니다...
 
-:: winget으로 설치 시도 (Windows 10/11)
+REM Try installing with winget (Windows 10/11)
 winget --version >nul 2>&1
 if not errorlevel 1 (
     echo       winget으로 FFmpeg 설치 중...
@@ -88,14 +90,14 @@ if not errorlevel 1 (
     )
 )
 
-:: winget 실패 시 직접 다운로드
+REM Direct download if winget fails
 echo       FFmpeg를 직접 다운로드합니다... (약 80MB, 1-2분 소요)
 
-:: tools 폴더에 ffmpeg 다운로드
+REM Download ffmpeg to tools folder
 if not exist "tools" mkdir tools
 if not exist "tools\ffmpeg" mkdir tools\ffmpeg
 
-:: curl로 다운로드 시도 (Windows 10 이상 기본 제공, 진행률 표시)
+REM Try download with curl (built-in on Windows 10+, shows progress)
 echo       다운로드 중... (진행률이 표시됩니다)
 curl -L -o "tools\ffmpeg.zip" "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip" --progress-bar
 
@@ -111,7 +113,7 @@ if exist "tools\ffmpeg.zip" (
 if exist "tools\ffmpeg\ffmpeg-master-latest-win64-gpl\bin\ffmpeg.exe" (
     echo       FFmpeg 다운로드 완료!
 
-    :: PATH에 추가 (현재 세션)
+    REM Add to PATH (current session)
     set "PATH=%~dp0tools\ffmpeg\ffmpeg-master-latest-win64-gpl\bin;%PATH%"
     echo       현재 세션에 FFmpeg 경로 추가됨
 ) else (
@@ -125,9 +127,9 @@ if exist "tools\ffmpeg\ffmpeg-master-latest-win64-gpl\bin\ffmpeg.exe" (
 
 :ffmpeg_done
 
-:: ============================================================
-:: 4. NVIDIA GPU 확인 및 PyTorch 설치
-:: ============================================================
+REM ============================================================
+REM 4. NVIDIA GPU check and PyTorch installation
+REM ============================================================
 echo.
 echo [4/10] NVIDIA GPU 확인 중...
 set HAS_NVIDIA=0
@@ -139,7 +141,7 @@ if not errorlevel 1 (
     echo       NVIDIA GPU 없음. CPU 버전으로 설치합니다.
 )
 
-:: PyTorch CUDA 버전 확인 (이미 CUDA 버전이면 재설치 안함)
+REM Check PyTorch CUDA version (skip reinstall if already CUDA version)
 set NEED_PYTORCH_REINSTALL=0
 if %HAS_NVIDIA%==1 (
     python -c "import torch; exit(0 if torch.cuda.is_available() else 1)" 2>nul
@@ -151,13 +153,13 @@ if %HAS_NVIDIA%==1 (
     )
 )
 
-:: ============================================================
-:: 5. 백엔드 패키지 설치
-:: ============================================================
+REM ============================================================
+REM 5. Backend package installation
+REM ============================================================
 echo.
 echo [5/10] 백엔드 패키지 확인 중...
 
-:: eSpeak-ng 항상 확인 및 설치 (Zonos TTS 필수 의존성)
+REM Always check and install eSpeak-ng (required for Zonos TTS)
 call :check_espeak
 if "%ESPEAK_OK%"=="1" (
     echo       eSpeak-ng 확인됨
@@ -165,7 +167,7 @@ if "%ESPEAK_OK%"=="1" (
     echo       [경고] eSpeak-ng 설치 실패. Zonos TTS가 작동하지 않을 수 있습니다.
 )
 
-:: Zonos TTS 설치 확인
+REM Check Zonos TTS installation
 python -c "import zonos" 2>nul
 if errorlevel 1 (
     call :install_zonos
@@ -175,13 +177,13 @@ goto after_zonos
 :install_zonos
 echo       Zonos TTS 설치 중...
 
-:: eSpeak-ng 재확인
+REM Re-check eSpeak-ng
 if "%ESPEAK_OK%"=="0" (
     echo       [경고] eSpeak-ng 없이 Zonos 설치를 건너뜁니다.
     exit /b
 )
 
-:: Zonos GitHub에서 클론 및 설치
+REM Clone and install from Zonos GitHub
 if not exist "external\Zonos" (
     echo       Zonos 소스 다운로드 중...
     cd external
@@ -207,14 +209,14 @@ exit /b
 :check_espeak
 set "ESPEAK_OK=0"
 
-:: 방법 1: PATH에서 espeak-ng 확인
+REM Method 1: Check espeak-ng in PATH
 where espeak-ng >nul 2>&1
 if not errorlevel 1 (
     set "ESPEAK_OK=1"
     exit /b
 )
 
-:: 방법 2: 기본 설치 경로 확인
+REM Method 2: Check default installation path
 if exist "C:\Program Files\eSpeak NG\espeak-ng.exe" (
     set "ESPEAK_OK=1"
     set "PATH=C:\Program Files\eSpeak NG;%PATH%"
@@ -228,7 +230,7 @@ if exist "C:\Program Files (x86)\eSpeak NG\espeak-ng.exe" (
 
 echo       [참고] eSpeak-ng가 필요합니다. 자동 설치를 시도합니다...
 
-:: 방법 3: winget으로 설치 시도
+REM Method 3: Try installing with winget
 winget --version >nul 2>&1
 if not errorlevel 1 (
     echo       winget으로 eSpeak-ng 설치 시도...
@@ -241,7 +243,7 @@ if not errorlevel 1 (
     )
 )
 
-:: 방법 4: GitHub에서 직접 다운로드 및 설치
+REM Method 4: Direct download and install from GitHub
 echo       GitHub에서 eSpeak-ng 다운로드 중...
 if not exist "tools" mkdir tools
 
@@ -271,7 +273,7 @@ if exist "C:\Program Files (x86)\eSpeak NG\espeak-ng.exe" (
     exit /b
 )
 
-:: 방법 5: 수동 설치 안내
+REM Method 5: Manual installation guide
 echo       [참고] 자동 설치 실패. 수동 설치를 시도합니다...
 echo       tools\espeak-ng.msi 파일을 더블클릭하여 설치해주세요.
 start "" "tools\espeak-ng.msi"
@@ -290,7 +292,7 @@ exit /b
 
 :after_zonos
 
-:: eSpeak-ng PATH 재확인 (서브루틴에서 설정한 값이 유지되지 않을 수 있음)
+REM Re-check eSpeak-ng PATH (value from subroutine may not persist)
 if exist "C:\Program Files\eSpeak NG\espeak-ng.exe" (
     set "PATH=C:\Program Files\eSpeak NG;%PATH%"
     set "PHONEMIZER_ESPEAK_LIBRARY=C:\Program Files\eSpeak NG\libespeak-ng.dll"
@@ -304,10 +306,10 @@ python -c "import torch,openai,livekit,cv2,mediapipe" 2>nul
 if errorlevel 1 (
     echo       패키지 설치 중... (최초 1회, 약 5-10분 소요)
 
-    :: NumPy 1.x 버전 먼저 설치 (다른 패키지가 NumPy 2.x 설치하지 않도록)
+    REM Install NumPy 1.x first (prevent other packages from installing NumPy 2.x)
     pip install numpy==1.26.4 --no-cache-dir -q
 
-    :: PyTorch 설치 (GPU/CPU 자동 선택)
+    REM Install PyTorch (auto-select GPU/CPU)
     if %HAS_NVIDIA%==1 (
         echo       CUDA PyTorch 설치 중... (약 2GB 다운로드)
         pip uninstall torch torchaudio torchvision -y 2>nul
@@ -319,8 +321,9 @@ if errorlevel 1 (
     pip install fastapi uvicorn python-dotenv websockets aiofiles pydantic -q
     pip install "protobuf>=3.20,<5.0" -q
 
-    pip uninstall opencv-python opencv-contrib-python -y 2>nul
-    pip install opencv-python-headless -q
+    REM Install opencv-python (required by basicsr, facexlib, gfpgan, realesrgan)
+    pip uninstall opencv-python-headless opencv-contrib-python -y 2>nul
+    pip install opencv-python -q
 
     pip install openai livekit livekit-api -q
     pip install transformers diffusers huggingface_hub -q
@@ -331,7 +334,7 @@ if errorlevel 1 (
     echo       패키지 설치 완료!
 ) else (
     echo       패키지 확인 완료
-    :: 기존 패키지 있어도 PyTorch CUDA 업그레이드 필요시 실행
+    REM Run PyTorch CUDA upgrade even if existing packages present
     if %NEED_PYTORCH_REINSTALL%==1 (
         echo       CUDA PyTorch로 업그레이드 중... (약 2GB 다운로드)
         pip uninstall torch torchaudio torchvision -y 2>nul
@@ -340,28 +343,32 @@ if errorlevel 1 (
     )
 )
 
-:: ============================================================
-:: 5.5 NumPy 1차 호환성 적용 (mediapipe/matplotlib 문제)
-:: ============================================================
+REM ============================================================
+REM 5.5 NumPy first compatibility fix (mediapipe/matplotlib issue)
+REM ============================================================
 echo.
 echo [5.5/10] NumPy 호환성 확인 중...
 python -c "import numpy; v=numpy.__version__; exit(0 if int(v.split('.')[0]) < 2 else 1)" 2>nul
 if errorlevel 1 (
     echo       NumPy 2.x 감지됨, 1.x로 다운그레이드 중...
     pip uninstall numpy -y >nul 2>&1
-    pip install numpy==1.26.4 --no-cache-dir -q
+    pip install numpy==1.26.4 --no-cache-dir -q 2>nul
+    if errorlevel 1 (
+        echo       [경고] 권한 오류 발생, --user 옵션으로 재시도 중...
+        pip install numpy==1.26.4 --no-cache-dir --user -q
+    )
     echo       NumPy 다운그레이드 완료!
 ) else (
     echo       NumPy 호환성 확인됨
 )
 
-:: ============================================================
-:: 6. MuseTalk 설치 (립싱크 모델)
-:: ============================================================
+REM ============================================================
+REM 6. MuseTalk installation (lip-sync model)
+REM ============================================================
 echo.
 echo [6/10] MuseTalk 립싱크 모델 확인 중...
 
-:: MuseTalk 소스 코드 클론
+REM Clone MuseTalk source code
 if not exist "external\MuseTalk\musetalk" (
     echo       MuseTalk 소스 코드 다운로드 중...
     if not exist "external" mkdir external
@@ -379,23 +386,44 @@ if not exist "external\MuseTalk\musetalk" (
     echo       MuseTalk 소스 확인됨
 )
 
-:: MuseTalk 의존성 설치
+REM Install MuseTalk dependencies
 python -c "import mmcv" 2>nul
 if errorlevel 1 (
     echo       MuseTalk 의존성 설치 중... (약 5분 소요)
 
-    :: NumPy 1.x 버전 고정 (mmcv가 NumPy 2.x 설치 방지)
+    REM Pin NumPy 1.x (prevent mmcv from installing NumPy 2.x)
     pip install numpy==1.26.4 --no-cache-dir -q
 
-    :: mmcv, mmdet, mmpose 설치 (MuseTalk 필수 의존성)
+    REM Install mmcv, mmdet, mmpose (MuseTalk required dependencies)
     pip install openmim -q
     mim install mmengine -q
     mim install "mmcv>=2.0.0" -q
     mim install "mmdet>=3.0.0" -q
     mim install "mmpose>=1.0.0" -q
 
-    :: MuseTalk 추가 의존성
-    pip install face-alignment dlib --no-cache-dir -q
+    REM Check and install CMake for dlib build
+    cmake --version >nul 2>&1
+    if errorlevel 1 (
+        echo       CMake 설치 중... (dlib 빌드에 필요)
+        winget --version >nul 2>&1
+        if not errorlevel 1 (
+            winget install Kitware.CMake --accept-source-agreements --accept-package-agreements -h >nul 2>&1
+        )
+        REM If winget fails, try pip cmake
+        cmake --version >nul 2>&1
+        if errorlevel 1 (
+            pip install cmake -q
+        )
+    )
+
+    REM MuseTalk additional dependencies
+    pip install face-alignment --no-cache-dir -q
+    REM Try pre-built dlib wheel first (faster, no CMake needed)
+    pip install dlib --no-cache-dir -q 2>nul
+    if errorlevel 1 (
+        echo       [경고] dlib 사전 빌드 휠 없음, 소스에서 빌드 중...
+        pip install dlib --no-cache-dir -q
+    )
     pip install kornia yacs einops --no-cache-dir -q
 
     echo       MuseTalk 의존성 설치 완료!
@@ -403,24 +431,24 @@ if errorlevel 1 (
     echo       MuseTalk 의존성 확인됨
 )
 
-:: MuseTalk 모델 파일 다운로드
+REM Download MuseTalk model files
 if not exist "models\musetalk\musetalkV15\unet.pth" (
     echo       MuseTalk 모델 파일 다운로드 중... (약 1.5GB)
 
-    :: 디렉토리 생성
+    REM Create directories
     if not exist "models\musetalk\musetalkV15" mkdir "models\musetalk\musetalkV15"
     if not exist "models\musetalk\dwpose" mkdir "models\musetalk\dwpose"
     if not exist "models\musetalk\face-parse-bisent" mkdir "models\musetalk\face-parse-bisent"
     if not exist "models\musetalk\whisper" mkdir "models\musetalk\whisper"
 
-    :: HuggingFace에서 모델 다운로드 (전체 repo)
+    REM Download model from HuggingFace (full repo)
     echo       HuggingFace에서 MuseTalk 모델 다운로드 중...
     python -c "from huggingface_hub import snapshot_download; snapshot_download('TMElyralab/MuseTalk', local_dir='models/musetalk/hf_download', local_dir_use_symlinks=False)"
 
-    :: 다운로드된 구조 확인 및 파일 복사 (다양한 경로 시도)
-    :: HuggingFace 구조: models/musetalk/, models/dwpose/, models/face-parse-bisent/, models/whisper/
+    REM Check downloaded structure and copy files (try various paths)
+    REM HuggingFace structure: models/musetalk/, models/dwpose/, models/face-parse-bisent/, models/whisper/
 
-    :: MuseTalk 메인 모델 (musetalk.json, pytorch_model.bin)
+    REM MuseTalk main model (musetalk.json, pytorch_model.bin)
     if exist "models\musetalk\hf_download\models\musetalk\musetalk.json" (
         echo       Copying MuseTalk config from models/musetalk/
         copy "models\musetalk\hf_download\models\musetalk\musetalk.json" "models\musetalk\musetalkV15\" >nul
@@ -431,7 +459,7 @@ if not exist "models\musetalk\musetalkV15\unet.pth" (
         copy "models\musetalk\hf_download\musetalk\pytorch_model.bin" "models\musetalk\musetalkV15\unet.pth" >nul
     )
 
-    :: DWPose 모델
+    REM DWPose model
     if exist "models\musetalk\hf_download\models\dwpose" (
         echo       Copying DWPose models...
         xcopy "models\musetalk\hf_download\models\dwpose\*" "models\musetalk\dwpose\" /s /e /y >nul 2>nul
@@ -439,7 +467,7 @@ if not exist "models\musetalk\musetalkV15\unet.pth" (
         xcopy "models\musetalk\hf_download\dwpose\*" "models\musetalk\dwpose\" /s /e /y >nul 2>nul
     )
 
-    :: Face parsing 모델
+    REM Face parsing model
     if exist "models\musetalk\hf_download\models\face-parse-bisent" (
         echo       Copying Face Parsing models...
         xcopy "models\musetalk\hf_download\models\face-parse-bisent\*" "models\musetalk\face-parse-bisent\" /s /e /y >nul 2>nul
@@ -447,7 +475,7 @@ if not exist "models\musetalk\musetalkV15\unet.pth" (
         xcopy "models\musetalk\hf_download\face-parse-bisent\*" "models\musetalk\face-parse-bisent\" /s /e /y >nul 2>nul
     )
 
-    :: Whisper 모델
+    REM Whisper model
     if exist "models\musetalk\hf_download\models\whisper" (
         echo       Copying Whisper models...
         xcopy "models\musetalk\hf_download\models\whisper\*" "models\musetalk\whisper\" /s /e /y >nul 2>nul
@@ -455,7 +483,7 @@ if not exist "models\musetalk\musetalkV15\unet.pth" (
         xcopy "models\musetalk\hf_download\whisper\*" "models\musetalk\whisper\" /s /e /y >nul 2>nul
     )
 
-    :: 최종 확인
+    REM Final verification
     if exist "models\musetalk\musetalkV15\unet.pth" (
         echo       MuseTalk 모델 다운로드 완료!
     ) else (
@@ -467,7 +495,7 @@ if not exist "models\musetalk\musetalkV15\unet.pth" (
     echo       MuseTalk 모델 확인됨
 )
 
-:: SD-VAE 모델 다운로드
+REM Download SD-VAE model
 if not exist "models\musetalk\sd-vae-ft-mse\config.json" (
     echo       SD-VAE 모델 다운로드 중...
     python -c "from huggingface_hub import snapshot_download; from pathlib import Path; Path('models/musetalk/sd-vae-ft-mse').mkdir(parents=True,exist_ok=True); snapshot_download('stabilityai/sd-vae-ft-mse',local_dir='models/musetalk/sd-vae-ft-mse')"
@@ -476,16 +504,16 @@ if not exist "models\musetalk\sd-vae-ft-mse\config.json" (
     echo       SD-VAE 모델 확인됨
 )
 
-:: Face-parse-bisent 모델 경로 설정 (MuseTalk이 ./models/face-parse-bisent 경로 기대)
-:: 두 파일 모두 필요: resnet18-5c106cde.pth, 79999_iter.pth
+REM Set face-parse-bisent model path (MuseTalk expects ./models/face-parse-bisent)
+REM Both files required: resnet18-5c106cde.pth, 79999_iter.pth
 call :download_face_parser
 goto after_face_parser
 
 :download_face_parser
-:: 디렉토리 생성
+REM Create directory
 if not exist "models\face-parse-bisent" mkdir "models\face-parse-bisent"
 
-:: 파일 검증 (손상된 파일 삭제)
+REM Verify file (delete if corrupted)
 if exist "models\face-parse-bisent\79999_iter.pth" (
     python -c "import torch; torch.load('models/face-parse-bisent/79999_iter.pth', map_location='cpu', weights_only=True)" 2>nul
     if errorlevel 1 (
@@ -497,28 +525,41 @@ if exist "models\face-parse-bisent\79999_iter.pth" (
     )
 )
 
-:: resnet18 다운로드 (없으면)
+REM Download resnet18 (if not present)
 if not exist "models\face-parse-bisent\resnet18-5c106cde.pth" (
     echo       resnet18 모델 다운로드 중...
     curl -L -o "models\face-parse-bisent\resnet18-5c106cde.pth" "https://download.pytorch.org/models/resnet18-5c106cde.pth" --progress-bar
 )
 
-:: 79999_iter.pth 다운로드 (없으면)
+REM Download 79999_iter.pth (if not present)
 if not exist "models\face-parse-bisent\79999_iter.pth" (
     echo       79999_iter.pth 모델 다운로드 중...
 
-    :: 방법 1: MuseTalk HF repo에서 직접 다운로드 (huggingface_hub 사용)
+    REM Method 1: Direct download from MuseTalk HF repo (using huggingface_hub)
     echo       방법 1: HuggingFace Hub에서 다운로드...
     python -c "from huggingface_hub import hf_hub_download; import shutil; import os; f=hf_hub_download(repo_id='TMElyralab/MuseTalk', filename='models/face-parse-bisent/79999_iter.pth'); os.makedirs('models/face-parse-bisent', exist_ok=True); shutil.copy(f, 'models/face-parse-bisent/79999_iter.pth'); print('Downloaded:', f)" 2>nul
 )
 
-:: 방법 1 실패 시 - 방법 2: 직접 URL 다운로드
+REM If method 1 fails - Method 2: Direct URL download with wget/curl and verification
 if not exist "models\face-parse-bisent\79999_iter.pth" (
     echo       방법 2: HuggingFace 직접 URL에서 다운로드...
     curl -L -o "models\face-parse-bisent\79999_iter.pth" "https://huggingface.co/TMElyralab/MuseTalk/resolve/main/models/face-parse-bisent/79999_iter.pth" --progress-bar
+    REM Check file size (should be >50MB, not HTML error page)
+    for %%A in ("models\face-parse-bisent\79999_iter.pth") do (
+        if %%~zA LSS 1000000 (
+            echo       [경고] 다운로드 파일 크기 이상, 삭제 중...
+            del "models\face-parse-bisent\79999_iter.pth" 2>nul
+        )
+    )
 )
 
-:: 방법 2 실패 시 - 방법 3: 이미 다운로드된 musetalk 폴더에서 복사
+REM If method 2 fails - Method 2.5: Python requests download
+if not exist "models\face-parse-bisent\79999_iter.pth" (
+    echo       방법 2.5: Python requests로 다운로드...
+    python -c "import requests; import os; os.makedirs('models/face-parse-bisent', exist_ok=True); r=requests.get('https://huggingface.co/TMElyralab/MuseTalk/resolve/main/models/face-parse-bisent/79999_iter.pth', allow_redirects=True); open('models/face-parse-bisent/79999_iter.pth','wb').write(r.content) if len(r.content)>1000000 else None; print('Downloaded' if len(r.content)>1000000 else 'Failed')" 2>nul
+)
+
+REM If method 2.5 fails - Method 3: Copy from already downloaded musetalk folder
 if not exist "models\face-parse-bisent\79999_iter.pth" (
     if exist "models\musetalk\face-parse-bisent\79999_iter.pth" (
         echo       방법 3: 기존 MuseTalk 폴더에서 복사...
@@ -526,7 +567,7 @@ if not exist "models\face-parse-bisent\79999_iter.pth" (
     )
 )
 
-:: 방법 3 실패 시 - 방법 4: HF 다운로드 폴더에서 복사
+REM If method 3 fails - Method 4: Copy from HF download folder
 if not exist "models\face-parse-bisent\79999_iter.pth" (
     if exist "models\musetalk\hf_download\models\face-parse-bisent\79999_iter.pth" (
         echo       방법 4: HF 다운로드 폴더에서 복사...
@@ -534,7 +575,7 @@ if not exist "models\face-parse-bisent\79999_iter.pth" (
     )
 )
 
-:: 다운로드 성공 검증
+REM Verify download success
 if exist "models\face-parse-bisent\79999_iter.pth" (
     python -c "import torch; torch.load('models/face-parse-bisent/79999_iter.pth', map_location='cpu', weights_only=True)" 2>nul
     if errorlevel 1 (
@@ -554,13 +595,13 @@ exit /b
 
 :after_face_parser
 
-:: ============================================================
-:: 6.5 LivePortrait 설치 (Idle 애니메이션)
-:: ============================================================
+REM ============================================================
+REM 6.5 LivePortrait installation (Idle animation)
+REM ============================================================
 echo.
 echo [6.5/10] LivePortrait 설치 확인 중...
 
-:: LivePortrait 소스 코드 클론
+REM Clone LivePortrait source code
 if not exist "external\LivePortrait\src" (
     echo       LivePortrait 소스 코드 다운로드 중...
     if not exist "external" mkdir external
@@ -577,33 +618,33 @@ if not exist "external\LivePortrait\src" (
     echo       LivePortrait 소스 확인됨
 )
 
-:: LivePortrait 의존성 설치
+REM Install LivePortrait dependencies
 python -c "import onnxruntime" 2>nul
 if errorlevel 1 (
     echo       LivePortrait 의존성 설치 중...
-    :: NumPy 1.x 버전 고정 (onnxruntime가 NumPy 2.x 설치 방지)
+    REM Pin NumPy 1.x (prevent onnxruntime from installing NumPy 2.x)
     pip install numpy==1.26.4 --no-cache-dir -q
     pip install onnxruntime-gpu onnx --no-cache-dir -q
     pip install tyro rich tqdm --no-cache-dir -q
     echo       LivePortrait 의존성 설치 완료!
 )
 
-:: LivePortrait 모델 파일 다운로드
+REM Download LivePortrait model files
 if not exist "models\live_portrait\appearance_feature_extractor.safetensors" (
     echo       LivePortrait 모델 파일 다운로드 중... (약 400MB)
 
     if not exist "models\live_portrait" mkdir "models\live_portrait"
 
-    :: HuggingFace에서 LivePortrait 모델 다운로드
+    REM Download LivePortrait model from HuggingFace
     python -c "from huggingface_hub import snapshot_download; snapshot_download('KwaiVGI/LivePortrait', local_dir='models/live_portrait', local_dir_use_symlinks=False)"
     echo       LivePortrait 모델 다운로드 완료!
 ) else (
     echo       LivePortrait 모델 확인됨
 )
 
-:: ============================================================
-:: 7. 프론트엔드 패키지 설치
-:: ============================================================
+REM ============================================================
+REM 7. Frontend package installation
+REM ============================================================
 echo.
 echo [7/10] 프론트엔드 패키지 확인 중...
 if not exist "frontend\node_modules" (
@@ -616,9 +657,9 @@ if not exist "frontend\node_modules" (
     echo       프론트엔드 패키지 확인 완료
 )
 
-:: ============================================================
-:: 8. 환경설정
-:: ============================================================
+REM ============================================================
+REM 8. Environment configuration
+REM ============================================================
 echo.
 echo [8/10] 환경 설정 확인 중...
 
@@ -629,7 +670,7 @@ if not exist ".env" (
     )
 )
 
-:: GPU 감지 시 .env의 DEVICE를 cuda로 변경
+REM Change DEVICE to cuda in .env if GPU detected
 if %HAS_NVIDIA%==1 (
     findstr /C:"DEVICE=cpu" .env >nul 2>&1
     if not errorlevel 1 (
@@ -645,9 +686,9 @@ if not exist "frontend\.env" (
 )
 echo       환경 설정 확인 완료
 
-:: ============================================================
-:: 8.5 NumPy 최종 호환성 강제 적용 (모든 패키지 설치 후)
-:: ============================================================
+REM ============================================================
+REM 8.5 Force final NumPy compatibility (after all packages installed)
+REM ============================================================
 echo.
 echo [8.5/10] NumPy 최종 호환성 강제 적용 중...
 python -c "import numpy; v=numpy.__version__; exit(0 if int(v.split('.')[0]) < 2 else 1)" 2>nul
@@ -655,11 +696,16 @@ if errorlevel 1 (
     echo       [!] NumPy 2.x가 다시 설치됨, 최종 강제 다운그레이드 중...
     pip uninstall numpy -y >nul 2>&1
     pip cache purge >nul 2>&1
-    pip install numpy==1.26.4 --no-cache-dir --force-reinstall -q
+    pip install numpy==1.26.4 --no-cache-dir --force-reinstall -q 2>nul
+    if errorlevel 1 (
+        echo       [경고] 권한 오류 발생, --user 옵션으로 재시도 중...
+        pip install numpy==1.26.4 --no-cache-dir --force-reinstall --user -q
+    )
 
-    :: 의존성 패키지도 재컴파일 (NumPy 헤더 호환성)
-    echo       mediapipe/matplotlib 재설치 중...
-    pip uninstall mediapipe -y >nul 2>&1
+    REM Recompile dependent packages (NumPy header compatibility)
+    echo       pandas/mediapipe 재설치 중...
+    pip uninstall pandas mediapipe -y >nul 2>&1
+    pip install pandas --no-cache-dir -q
     pip install mediapipe --no-cache-dir -q
 
     python -c "import numpy; print(f'       NumPy 버전: {numpy.__version__}')"
@@ -668,9 +714,9 @@ if errorlevel 1 (
     python -c "import numpy; print(f'       NumPy 버전: {numpy.__version__} [호환]')"
 )
 
-:: ============================================================
-:: 9. 서버 실행 (백엔드 + 프론트엔드)
-:: ============================================================
+REM ============================================================
+REM 9. Server startup (Backend + Frontend)
+REM ============================================================
 echo.
 echo [9/10] 서버 시작 중...
 echo.
@@ -682,13 +728,13 @@ echo   종료: 이 창을 닫으세요
 echo ============================================================
 echo.
 
-:: eSpeak-ng PATH 설정 (Zonos TTS용)
+REM Set eSpeak-ng PATH (for Zonos TTS)
 set "ESPEAK_PATH="
 if exist "C:\Program Files\eSpeak NG\espeak-ng.exe" set "ESPEAK_PATH=C:\Program Files\eSpeak NG"
 if exist "C:\Program Files (x86)\eSpeak NG\espeak-ng.exe" set "ESPEAK_PATH=C:\Program Files (x86)\eSpeak NG"
 
-:: 백엔드를 새 창에서 실행 (eSpeak-ng PATH 포함, torch.compile 비활성화)
-:: TORCHDYNAMO_DISABLE=1: Windows에서 Triton 경고 방지
+REM Start backend in new window (with eSpeak-ng PATH, torch.compile disabled)
+REM TORCHDYNAMO_DISABLE=1: Prevents Triton warning on Windows
 if defined ESPEAK_PATH (
     start "Backend - AI Avatar" cmd /k "cd /d %~dp0 && set PATH=%ESPEAK_PATH%;%PATH% && set PHONEMIZER_ESPEAK_LIBRARY=%ESPEAK_PATH%\libespeak-ng.dll && set TORCHDYNAMO_DISABLE=1 && python -m uvicorn src.main:app --host 0.0.0.0 --port 8000 --reload"
 ) else (
@@ -696,7 +742,7 @@ if defined ESPEAK_PATH (
     start "Backend - AI Avatar" cmd /k "cd /d %~dp0 && set TORCHDYNAMO_DISABLE=1 && python -m uvicorn src.main:app --host 0.0.0.0 --port 8000 --reload"
 )
 
-:: 백엔드 서버가 준비될 때까지 대기
+REM Wait for backend server to be ready
 echo       백엔드 서버 초기화 대기 중...
 :wait_backend
 timeout /t 2 /nobreak >nul
@@ -707,10 +753,10 @@ if errorlevel 1 (
 )
 echo       백엔드 서버 준비 완료!
 
-:: 프론트엔드를 새 창에서 실행
+REM Start frontend in new window
 start "Frontend - AI Avatar" cmd /k "cd /d %~dp0frontend && npm run dev"
 
-:: 프론트엔드 서버가 준비될 때까지 대기
+REM Wait for frontend server to be ready
 echo       프론트엔드 서버 초기화 대기 중...
 :wait_frontend
 timeout /t 2 /nobreak >nul
@@ -721,7 +767,7 @@ if errorlevel 1 (
 )
 echo       프론트엔드 서버 준비 완료!
 
-:: 모든 서버 준비 후 브라우저 열기
+REM Open browser after all servers are ready
 echo.
 echo [10/10] 브라우저 열기...
 start http://localhost:5173
