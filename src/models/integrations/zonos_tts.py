@@ -7,11 +7,14 @@ Zonos TTS - 고품질 다국어 음성 합성 및 음성 복제
 - 감정 제어: 행복, 슬픔, 분노, 두려움 등
 """
 
+# Windows에서 Triton 경고 비활성화 (torch import 전에 설정 필수)
+import os
+os.environ["TORCHDYNAMO_DISABLE"] = "1"
+
 import asyncio
 import io
 import json
 import logging
-import os
 import shutil
 from pathlib import Path
 from typing import AsyncGenerator, Optional, Dict, List, Any
@@ -111,15 +114,8 @@ class ZonosTTSModel:
             logger.info("Loading Zonos TTS model...")
 
             # Zonos 모델 로드
+            # NOTE: TORCHDYNAMO_DISABLE=1이 파일 상단에서 설정되어 torch.compile() 비활성화됨
             try:
-                import torch
-
-                # torch.compile() 비활성화 (Windows에서 C++ 컴파일러 없이 실행)
-                # 이렇게 하면 eager mode로 실행되어 약간 느리지만 작동함
-                import torch._dynamo
-                torch._dynamo.config.suppress_errors = True
-                torch._dynamo.disable()
-
                 from zonos.model import Zonos
 
                 self._model = Zonos.from_pretrained(self.model_name, device=self.device)
