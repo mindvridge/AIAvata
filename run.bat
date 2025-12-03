@@ -156,6 +156,24 @@ if %HAS_NVIDIA%==1 (
 :: ============================================================
 echo.
 echo [5/10] 백엔드 패키지 확인 중...
+
+:: NumPy 2.x 호환성 체크 (mediapipe/matplotlib 문제)
+python -c "import numpy; exit(0 if int(numpy.__version__.split('.')[0]) < 2 else 1)" 2>nul
+if errorlevel 1 (
+    echo       NumPy 2.x 감지됨, 1.x로 다운그레이드 중...
+    pip uninstall numpy -y >nul 2>&1
+    pip install "numpy>=1.24.0,<2.0" -q
+    echo       NumPy 다운그레이드 완료!
+)
+
+:: Zonos TTS 설치 확인
+python -c "import zonos" 2>nul
+if errorlevel 1 (
+    echo       Zonos TTS 설치 중...
+    pip install zonos pydub -q
+    echo       Zonos TTS 설치 완료!
+)
+
 python -c "import torch,openai,livekit,cv2,mediapipe" 2>nul
 if errorlevel 1 (
     echo       패키지 설치 중... (최초 1회, 약 5-10분 소요)
@@ -170,16 +188,16 @@ if errorlevel 1 (
     )
 
     pip install fastapi uvicorn python-dotenv websockets aiofiles pydantic -q
-    pip install "numpy<2.0" -q
+    pip install "numpy>=1.24.0,<2.0" -q
     pip install "protobuf>=3.20,<5.0" -q
 
     pip uninstall opencv-python opencv-contrib-python -y 2>nul
     pip install opencv-python-headless -q
 
-    pip install openai anthropic livekit livekit-api -q
+    pip install openai livekit livekit-api -q
     pip install transformers diffusers huggingface_hub -q
     pip install funasr modelscope omegaconf kaldiio -q
-    pip install edge-tts gtts chatterbox-tts resemble-perth pydub -q
+    pip install zonos pydub -q
     pip install mediapipe librosa einops -q
 
     echo       패키지 설치 완료!
@@ -310,6 +328,19 @@ if not exist "models\musetalk\sd-vae-ft-mse\config.json" (
     echo       SD-VAE 모델 다운로드 완료!
 ) else (
     echo       SD-VAE 모델 확인됨
+)
+
+:: Face-parse-bisent 모델 경로 설정 (MuseTalk이 ./models/face-parse-bisent 경로 기대)
+if not exist "models\face-parse-bisent" (
+    if exist "models\musetalk\face-parse-bisent" (
+        echo       Face parser 모델 링크 생성 중...
+        mklink /D "models\face-parse-bisent" "musetalk\face-parse-bisent" >nul 2>&1
+        if errorlevel 1 (
+            :: 심볼릭 링크 실패시 복사
+            xcopy "models\musetalk\face-parse-bisent\*" "models\face-parse-bisent\" /s /e /y >nul 2>nul
+        )
+        echo       Face parser 모델 경로 설정 완료!
+    )
 )
 
 :: ============================================================
