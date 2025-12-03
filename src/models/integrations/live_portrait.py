@@ -94,22 +94,25 @@ class LivePortraitModel:
                 return True
 
             try:
-                # LivePortrait 모듈 임포트 (sys.path 격리)
-                # 현재 sys.path 백업
-                original_path = sys.path.copy()
+                # importlib를 사용하여 LivePortrait 모듈 직접 로드 (경로 충돌 방지)
+                import importlib.util
 
-                # 프로젝트의 'src' 경로를 임시로 제거하고 LivePortrait 경로 추가
-                project_src = str(Path(__file__).parent.parent.parent.parent.resolve())
-                sys.path = [p for p in sys.path if not p.startswith(project_src) or 'external' in p]
+                # LivePortrait의 src를 sys.path에 추가 (의존성 해결용)
+                original_path = sys.path.copy()
+                original_modules = dict(sys.modules)
+
+                # 프로젝트 src 모듈을 임시로 제거
+                modules_to_remove = [k for k in sys.modules.keys() if k == 'src' or k.startswith('src.')]
+                for mod in modules_to_remove:
+                    del sys.modules[mod]
+
+                # LivePortrait 경로 추가
                 sys.path.insert(0, str(lp_base_path))
 
                 try:
                     # LivePortrait 모듈 임포트
                     from src.config.inference_config import InferenceConfig
                     from src.live_portrait_pipeline import LivePortraitPipeline
-
-                    # 임포트 성공 후 sys.path 복원
-                    sys.path = original_path
 
                     # 모델 경로 설정
                     model_config = {
@@ -126,31 +129,33 @@ class LivePortraitModel:
                     if not models_exist:
                         logger.warning("LivePortrait model files not found. Using fallback.")
                         self._use_fallback = True
-                        self._initialized = True
-                        return True
+                    else:
+                        # 설정 및 파이프라인 초기화
+                        inference_cfg = InferenceConfig(
+                            device_id=0 if self.device == "cuda" else -1,
+                            flag_force_cpu=self.device != "cuda",
+                        )
 
-                    # 설정 및 파이프라인 초기화
-                    inference_cfg = InferenceConfig(
-                        device_id=0 if self.device == "cuda" else -1,
-                        flag_force_cpu=self.device != "cuda",
-                    )
-
-                    self._pipeline = LivePortraitPipeline(
-                        inference_cfg=inference_cfg,
-                        crop_cfg=None,
-                    )
-
-                    logger.info("LivePortrait pipeline initialized successfully")
+                        self._pipeline = LivePortraitPipeline(
+                            inference_cfg=inference_cfg,
+                            crop_cfg=None,
+                        )
+                        logger.info("LivePortrait pipeline initialized successfully")
 
                 except ImportError as e:
-                    # 임포트 실패 시에도 sys.path 복원
-                    sys.path = original_path
-                    raise e
+                    logger.warning(f"Failed to import LivePortrait modules: {e}")
+                    logger.info("Using fallback animation implementation")
+                    self._use_fallback = True
 
-            except ImportError as e:
-                logger.warning(f"Failed to import LivePortrait modules: {e}")
-                logger.info("Using fallback animation implementation")
-                self._use_fallback = True
+                finally:
+                    # sys.path 복원
+                    sys.path = original_path
+                    # 프로젝트 src 모듈 복원 (LivePortrait 모듈은 유지)
+                    for mod_name, mod in original_modules.items():
+                        if mod_name == 'src' or mod_name.startswith('src.'):
+                            # 프로젝트 모듈만 복원
+                            if 'LivePortrait' not in str(getattr(mod, '__file__', '')):
+                                sys.modules[mod_name] = mod
 
             except Exception as e:
                 logger.warning(f"Failed to initialize LivePortrait pipeline: {e}")

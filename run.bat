@@ -461,15 +461,24 @@ if not exist "models\musetalk\sd-vae-ft-mse\config.json" (
 
 :: Face-parse-bisent 모델 경로 설정 (MuseTalk이 ./models/face-parse-bisent 경로 기대)
 :: 두 파일 모두 필요: resnet18-5c106cde.pth, 79999_iter.pth
+:: 디렉토리 생성
+if not exist "models\face-parse-bisent" mkdir "models\face-parse-bisent"
+
+:: 파일 검증 (손상된 파일 삭제)
+if exist "models\face-parse-bisent\79999_iter.pth" (
+    python -c "import torch; torch.load('models/face-parse-bisent/79999_iter.pth', map_location='cpu')" 2>nul
+    if errorlevel 1 (
+        echo       [경고] 79999_iter.pth 손상 감지, 삭제 후 재다운로드...
+        del "models\face-parse-bisent\79999_iter.pth" 2>nul
+    )
+)
+
 set "NEED_FP_DOWNLOAD=0"
 if not exist "models\face-parse-bisent\resnet18-5c106cde.pth" set "NEED_FP_DOWNLOAD=1"
 if not exist "models\face-parse-bisent\79999_iter.pth" set "NEED_FP_DOWNLOAD=1"
 
 if %NEED_FP_DOWNLOAD%==1 (
     echo       Face parser 모델 설정 중...
-
-    :: 디렉토리 생성
-    if not exist "models\face-parse-bisent" mkdir "models\face-parse-bisent"
 
     :: resnet18 다운로드 (없으면)
     if not exist "models\face-parse-bisent\resnet18-5c106cde.pth" (
@@ -481,19 +490,22 @@ if %NEED_FP_DOWNLOAD%==1 (
     if not exist "models\face-parse-bisent\79999_iter.pth" (
         echo       79999_iter.pth 모델 다운로드 중...
 
-        :: 방법 1: MuseTalk HF repo에서 직접 다운로드
+        :: 방법 1: MuseTalk HF repo에서 직접 다운로드 (huggingface_hub 사용)
         python -c "from huggingface_hub import hf_hub_download; import shutil; import os; f=hf_hub_download(repo_id='TMElyralab/MuseTalk', filename='models/face-parse-bisent/79999_iter.pth'); os.makedirs('models/face-parse-bisent', exist_ok=True); shutil.copy(f, 'models/face-parse-bisent/79999_iter.pth'); print('Downloaded:', f)"
+    )
 
-        :: 방법 2: 실패 시 대체 URL 시도
-        if not exist "models\face-parse-bisent\79999_iter.pth" (
-            echo       대체 다운로드 시도 중...
-            curl -L -o "models\face-parse-bisent\79999_iter.pth" "https://huggingface.co/TMElyralab/MuseTalk/resolve/main/models/face-parse-bisent/79999_iter.pth" --progress-bar
+    :: 다운로드 성공 검증
+    if exist "models\face-parse-bisent\79999_iter.pth" (
+        python -c "import torch; torch.load('models/face-parse-bisent/79999_iter.pth', map_location='cpu')" 2>nul
+        if errorlevel 1 (
+            echo       [경고] 다운로드된 파일 손상, 삭제 중...
+            del "models\face-parse-bisent\79999_iter.pth" 2>nul
+        ) else (
+            echo       Face parser 모델 설정 완료!
         )
     )
 
-    if exist "models\face-parse-bisent\79999_iter.pth" (
-        echo       Face parser 모델 설정 완료!
-    ) else (
+    if not exist "models\face-parse-bisent\79999_iter.pth" (
         echo       [경고] Face parser 모델 다운로드 실패. 립싱크 품질이 저하될 수 있습니다.
     )
 ) else (

@@ -381,34 +381,38 @@ class ZonosTTSModel:
                 return self._generate_mock_audio(len(text))
 
             import torch
+            from zonos.conditioning import make_cond_dict
 
             # 스피커 임베딩 가져오기
             speaker_embedding = None
             if voice_id and voice_id in self._speaker_embeddings:
                 speaker_embedding = self._speaker_embeddings[voice_id]
 
-            # 감정 값 설정
-            emotion_value = self.EMOTIONS.get(emotion, 0)
+            # 언어 코드 변환 (Zonos 형식)
+            lang_map = {
+                "ko": "ko",
+                "en": "en-us",
+                "ja": "ja",
+                "zh": "zh",
+                "fr": "fr-fr",
+                "de": "de",
+            }
+            zonos_lang = lang_map.get(language, "en-us")
 
-            # 조건부 생성
-            cond_dict = self._model.make_cond_dict(
+            # 조건부 생성 (Zonos API)
+            cond_dict = make_cond_dict(
                 text=text,
                 speaker=speaker_embedding,
-                language=language,
-                emotion=[0.0] * 8,  # 감정 벡터 (8차원)
+                language=zonos_lang,
             )
 
-            # 감정 설정
-            if emotion_value > 0:
-                cond_dict["emotion"][emotion_value] = 1.0
-
-            # 속도/피치 조정
-            cond_dict["speaking_rate"] = torch.tensor([speaking_rate], device=self.device)
-            cond_dict["pitch_std"] = torch.tensor([pitch_std], device=self.device)
+            # 조건부 준비 및 생성
+            conditioning = self._model.prepare_conditioning(cond_dict)
 
             # 음성 생성
             with torch.no_grad():
-                audio = self._model.generate(cond_dict)
+                codes = self._model.generate(conditioning)
+                audio = self._model.autoencoder.decode(codes)
 
             # numpy 변환
             if isinstance(audio, torch.Tensor):
@@ -421,6 +425,9 @@ class ZonosTTSModel:
             audio = audio.astype(np.float32)
             if np.abs(audio).max() > 1.0:
                 audio = audio / np.abs(audio).max()
+
+            # Zonos 샘플레이트 사용 (44100Hz)
+            self.sample_rate = self._model.autoencoder.sampling_rate
 
             logger.info(f"Synthesized audio: {len(audio)} samples at {self.sample_rate}Hz")
             return audio
