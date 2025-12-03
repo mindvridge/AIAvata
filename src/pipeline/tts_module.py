@@ -1,9 +1,7 @@
 """
-TTS Module with multiple provider support.
+TTS Module with Zonos TTS support.
 
-다중 TTS 프로바이더 지원 모듈
-- edge-tts: Microsoft Azure 기반 한국어 TTS (무료, 빠름)
-- chatterbox: 음성 클로닝 지원 (영어만)
+Zonos TTS 음성 복제 모듈
 - zonos: 고품질 음성 복제 TTS (다국어, 한국어 포함)
 
 특징:
@@ -13,10 +11,8 @@ TTS Module with multiple provider support.
 """
 
 import asyncio
-import io
 import logging
 import re
-from pathlib import Path
 from typing import AsyncGenerator, Optional, Literal
 
 import numpy as np
@@ -32,20 +28,18 @@ _SENTENCE_END_PATTERN = re.compile(r"[.!?。！？]")
 
 class TTSModule:
     """
-    다중 프로바이더 TTS 모듈
+    Zonos TTS 모듈
 
     Features:
     - 텍스트 → 음성 변환
     - 스트리밍 출력
-    - edge-tts: 한국어 지원 (무료)
-    - chatterbox: 음성 클로닝 지원 (영어)
-    - zonos: 고품질 음성 복제 (다국어)
+    - zonos: 고품질 음성 복제 (다국어, 한국어 포함)
     """
 
     def __init__(
         self,
-        provider: Literal["edge-tts", "chatterbox", "zonos"] = "edge-tts",
-        voice: str = "ko-KR-SunHiNeural",
+        provider: Literal["zonos"] = "zonos",
+        voice: str = "default",
         voice_sample_path: Optional[str] = None,
         sample_rate: int = 24000,
         device: str = "cuda",
@@ -55,12 +49,12 @@ class TTSModule:
         Initialize TTS Module.
 
         Args:
-            provider: TTS 프로바이더 ("edge-tts" 또는 "chatterbox")
-            voice: edge-tts 음성 ID (예: ko-KR-SunHiNeural, ko-KR-InJoonNeural)
-            voice_sample_path: 음성 클로닝용 참조 오디오 경로 (chatterbox용)
+            provider: TTS 프로바이더 ("zonos")
+            voice: 음성 ID
+            voice_sample_path: 음성 클로닝용 참조 오디오 경로
             sample_rate: 출력 샘플레이트
             device: Compute device
-            voice_id: 음성 ID (chatterbox용)
+            voice_id: 음성 ID
         """
         self.provider = provider
         self.voice = voice
@@ -69,7 +63,6 @@ class TTSModule:
         self.device = device
         self.voice_id = voice_id
 
-        self._chatterbox_model = None
         self._zonos_model = None
         self._initialized = False
 
@@ -80,76 +73,26 @@ class TTSModule:
         if self._initialized:
             return
 
-        if self.provider == "edge-tts":
-            # edge-tts는 별도 초기화 불필요 (API 기반)
-            logger.info(f"Initializing edge-tts with voice: {self.voice}")
-            try:
-                import edge_tts
-                # 테스트 통신
-                communicate = edge_tts.Communicate("테스트", self.voice)
-                logger.info(f"edge-tts initialized successfully with voice: {self.voice}")
-                self._initialized = True
-            except ImportError:
-                logger.error("edge-tts not installed. Run: pip install edge-tts")
-                self._initialized = True  # 폴백 모드
-            except Exception as e:
-                logger.error(f"edge-tts initialization failed: {e}")
-                self._initialized = True  # 폴백 모드
+        logger.info("Initializing Zonos TTS model...")
+        try:
+            from ..models.integrations import ZonosTTSModel
 
-        elif self.provider == "chatterbox":
-            logger.info("Initializing Chatterbox TTS model...")
-            try:
-                from ..models.integrations import ChatterboxTTSModel
+            self._zonos_model = ZonosTTSModel(
+                device=self.device,
+                sample_rate=44100,  # Zonos uses 44.1kHz
+            )
 
-                self._chatterbox_model = ChatterboxTTSModel(
-                    device=self.device,
-                    sample_rate=self.sample_rate,
-                )
+            success = await self._zonos_model.initialize()
 
-                success = await self._chatterbox_model.initialize()
+            if not success:
+                logger.warning("Zonos TTS initialization returned False, using fallback")
 
-                if not success:
-                    logger.warning("Chatterbox TTS initialization returned False, using fallback")
-
-                # 음성 샘플 로드 (있는 경우)
-                if self.voice_sample_path and Path(self.voice_sample_path).exists():
-                    await self._chatterbox_model.load_voice(
-                        voice_path=self.voice_sample_path,
-                        voice_id=self.voice_id,
-                    )
-                    logger.info(f"Loaded voice sample from {self.voice_sample_path}")
-
-                self._initialized = True
-                logger.info("Chatterbox TTS model initialized successfully")
-
-            except Exception as e:
-                logger.error(f"Failed to initialize Chatterbox TTS: {e}")
-                self._initialized = True  # 폴백 모드
-
-        elif self.provider == "zonos":
-            logger.info("Initializing Zonos TTS model...")
-            try:
-                from ..models.integrations import ZonosTTSModel
-
-                self._zonos_model = ZonosTTSModel(
-                    device=self.device,
-                    sample_rate=44100,  # Zonos uses 44.1kHz
-                )
-
-                success = await self._zonos_model.initialize()
-
-                if not success:
-                    logger.warning("Zonos TTS initialization returned False, using fallback")
-
-                self._initialized = True
-                logger.info("Zonos TTS model initialized successfully")
-
-            except Exception as e:
-                logger.error(f"Failed to initialize Zonos TTS: {e}")
-                self._initialized = True  # 폴백 모드
-        else:
-            logger.error(f"Unknown TTS provider: {self.provider}")
             self._initialized = True
+            logger.info("Zonos TTS model initialized successfully")
+
+        except Exception as e:
+            logger.error(f"Failed to initialize Zonos TTS: {e}")
+            self._initialized = True  # 폴백 모드
 
     def _ensure_initialized(self) -> None:
         """초기화 확인"""
@@ -166,7 +109,7 @@ class TTSModule:
 
         Args:
             text: 변환할 텍스트
-            voice_id: 사용할 음성 ID (edge-tts: 무시, chatterbox: 사용)
+            voice_id: 사용할 음성 ID
 
         Returns:
             오디오 데이터 (numpy array, float32, -1.0 ~ 1.0)
@@ -176,116 +119,7 @@ class TTSModule:
         if not text.strip():
             return np.array([], dtype=np.float32)
 
-        if self.provider == "edge-tts":
-            return await self._synthesize_edge_tts(text)
-        elif self.provider == "chatterbox":
-            return await self._synthesize_chatterbox(text, voice_id)
-        elif self.provider == "zonos":
-            return await self._synthesize_zonos(text, voice_id)
-        else:
-            logger.warning(f"Unknown provider: {self.provider}, using mock audio")
-            return self._generate_mock_audio(len(text))
-
-    async def _synthesize_edge_tts(self, text: str) -> np.ndarray:
-        """edge-tts로 음성 합성"""
-        try:
-            import edge_tts
-
-            logger.info(f"🎤 edge-tts synthesizing: '{text[:50]}...' with voice {self.voice}")
-
-            # edge-tts로 MP3 생성
-            communicate = edge_tts.Communicate(text, self.voice)
-            mp3_data = b""
-
-            async for chunk in communicate.stream():
-                if chunk["type"] == "audio":
-                    mp3_data += chunk["data"]
-
-            if not mp3_data:
-                logger.warning("edge-tts returned empty audio")
-                return self._generate_mock_audio(len(text))
-
-            logger.debug(f"edge-tts MP3 data: {len(mp3_data)} bytes")
-
-            # MP3를 PCM으로 변환
-            audio = await self._convert_mp3_to_pcm(mp3_data)
-            logger.info(f"✅ edge-tts synthesis complete: {len(audio)} samples")
-            return audio
-
-        except ImportError:
-            logger.error("edge-tts not installed")
-            return self._generate_mock_audio(len(text))
-        except Exception as e:
-            logger.error(f"edge-tts synthesis error: {e}", exc_info=True)
-            return self._generate_mock_audio(len(text))
-
-    async def _convert_mp3_to_pcm(self, mp3_data: bytes) -> np.ndarray:
-        """MP3 바이트를 PCM numpy array로 변환"""
-        try:
-            # pydub 사용
-            from pydub import AudioSegment
-
-            audio_segment = AudioSegment.from_mp3(io.BytesIO(mp3_data))
-
-            # 타겟 샘플레이트로 리샘플링
-            if audio_segment.frame_rate != self.sample_rate:
-                audio_segment = audio_segment.set_frame_rate(self.sample_rate)
-
-            # 모노로 변환
-            if audio_segment.channels > 1:
-                audio_segment = audio_segment.set_channels(1)
-
-            # numpy array로 변환
-            samples = np.array(audio_segment.get_array_of_samples(), dtype=np.int16)
-
-            # float32로 정규화 (-1.0 ~ 1.0)
-            audio = samples.astype(np.float32) / 32768.0
-
-            logger.debug(f"MP3 to PCM conversion: {len(audio)} samples at {self.sample_rate}Hz")
-            return audio
-
-        except ImportError:
-            logger.warning("pydub not installed, trying librosa")
-            try:
-                import librosa
-
-                # 임시 파일 없이 메모리에서 처리
-                audio, sr = librosa.load(io.BytesIO(mp3_data), sr=self.sample_rate, mono=True)
-                return audio.astype(np.float32)
-            except Exception as e:
-                logger.error(f"librosa conversion failed: {e}")
-                return self._generate_mock_audio(100)
-
-        except Exception as e:
-            logger.error(f"MP3 to PCM conversion failed: {e}")
-            return self._generate_mock_audio(100)
-
-    async def _synthesize_chatterbox(self, text: str, voice_id: Optional[str] = None) -> np.ndarray:
-        """Chatterbox TTS로 음성 합성"""
-        use_voice_id = voice_id or self.voice_id
-
-        if self._chatterbox_model is None:
-            logger.warning(f"Chatterbox model not loaded, using mock audio for text: '{text[:50]}...'")
-            return self._generate_mock_audio(len(text))
-
-        try:
-            logger.debug(f"Calling Chatterbox TTS synthesize: text='{text[:50]}...', voice_id={use_voice_id}")
-            audio = await self._chatterbox_model.synthesize(
-                text=text,
-                voice_id=use_voice_id,
-            )
-
-            if audio is not None and len(audio) > 0:
-                logger.debug(f"TTS synthesize completed: {len(audio)} samples")
-            else:
-                logger.warning("TTS synthesize returned empty audio")
-
-            return audio
-
-        except Exception as e:
-            logger.error(f"TTS synthesis error: {e}", exc_info=True)
-            logger.warning(f"Falling back to mock audio for text: '{text[:50]}...'")
-            return self._generate_mock_audio(len(text))
+        return await self._synthesize_zonos(text, voice_id)
 
     async def _synthesize_zonos(self, text: str, voice_id: Optional[str] = None) -> np.ndarray:
         """Zonos TTS로 음성 합성"""
@@ -351,53 +185,24 @@ class TTSModule:
             )
             return
 
-        # ChatterboxTTSModel의 스트리밍 합성 사용
-        use_voice_id = voice_id or self.voice_id
+        # 폴백: 전체 합성 후 청크 분할
+        audio = await self.synthesize(text, voice_id)
 
-        if self._chatterbox_model:
-            chunk_index = 0
-            async for audio_chunk in self._chatterbox_model.synthesize_stream(
-                text=text,
-                voice_id=use_voice_id,
-                chunk_size=chunk_size,
-            ):
-                chunk_bytes = self._audio_to_bytes(audio_chunk)
-                duration_ms = len(audio_chunk) / self.sample_rate * 1000
+        for j in range(0, len(audio), chunk_size):
+            chunk_audio = audio[j : j + chunk_size]
+            chunk_bytes = self._audio_to_bytes(chunk_audio)
 
-                yield TTSChunk(
-                    audio_data=chunk_bytes,
-                    sample_rate=self.sample_rate,
-                    duration_ms=duration_ms,
-                    is_last=False,
-                )
-                chunk_index += 1
+            duration_ms = len(chunk_audio) / self.sample_rate * 1000
+            is_chunk_last = (j + chunk_size >= len(audio))
 
-            # 마지막 빈 청크로 종료 표시
             yield TTSChunk(
-                audio_data=b"",
+                audio_data=chunk_bytes,
                 sample_rate=self.sample_rate,
-                duration_ms=0,
-                is_last=True,
+                duration_ms=duration_ms,
+                is_last=is_chunk_last,
             )
-        else:
-            # 폴백: 전체 합성 후 청크 분할
-            audio = await self.synthesize(text, voice_id)
 
-            for j in range(0, len(audio), chunk_size):
-                chunk_audio = audio[j : j + chunk_size]
-                chunk_bytes = self._audio_to_bytes(chunk_audio)
-
-                duration_ms = len(chunk_audio) / self.sample_rate * 1000
-                is_chunk_last = (j + chunk_size >= len(audio))
-
-                yield TTSChunk(
-                    audio_data=chunk_bytes,
-                    sample_rate=self.sample_rate,
-                    duration_ms=duration_ms,
-                    is_last=is_chunk_last,
-                )
-
-                await asyncio.sleep(duration_ms / 1000 * 0.1)
+            await asyncio.sleep(duration_ms / 1000 * 0.1)
 
     async def synthesize_stream_realtime(
         self,
@@ -532,20 +337,17 @@ class TTSModule:
         duration_samples = int(text_length * 0.1 * self.sample_rate)
         if duration_samples == 0:
             duration_samples = int(0.5 * self.sample_rate)  # 최소 0.5초
-        
+
         # 무음 대신 테스트 신호(사인파) 생성 (파동이 보이도록)
         t = np.linspace(0, duration_samples / self.sample_rate, duration_samples)
         frequency = 440  # A4 음
         audio = 0.3 * np.sin(2 * np.pi * frequency * t).astype(np.float32)
-        
+
         logger.debug(f"Generated mock audio: {duration_samples} samples ({duration_samples/self.sample_rate:.2f}s)")
         return audio
 
     async def cleanup(self) -> None:
         """리소스 정리"""
-        if self._chatterbox_model is not None:
-            await self._chatterbox_model.cleanup()
-            self._chatterbox_model = None
         if self._zonos_model is not None:
             await self._zonos_model.cleanup()
             self._zonos_model = None

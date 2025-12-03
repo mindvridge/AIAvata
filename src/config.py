@@ -25,13 +25,12 @@ class Settings(BaseSettings):
     device: str = Field(default="cuda", description="Compute device (cuda, cpu, mps)")
 
     # LLM Configuration
-    anthropic_api_key: str = Field(default="", description="Anthropic API key")
     openai_api_key: str = Field(default="", description="OpenAI API key")
-    llm_provider: Literal["anthropic", "openai"] = Field(
-        default="anthropic", description="LLM provider"
+    llm_provider: Literal["openai"] = Field(
+        default="openai", description="LLM provider"
     )
     llm_model: str = Field(
-        default="claude-sonnet-4-20250514", description="LLM model name"
+        default="gpt-4o", description="LLM model name"
     )
 
     # LiveKit Configuration
@@ -84,11 +83,11 @@ class Settings(BaseSettings):
     video_height: int = Field(default=512, description="Output video height")
 
     # TTS Settings
-    tts_provider: Literal["edge-tts", "chatterbox", "zonos"] = Field(
-        default="edge-tts", description="TTS provider (edge-tts for Korean, chatterbox for English, zonos for voice cloning)"
+    tts_provider: Literal["zonos"] = Field(
+        default="zonos", description="TTS provider (zonos for voice cloning)"
     )
     tts_voice: str = Field(
-        default="ko-KR-SunHiNeural", description="TTS voice ID (edge-tts Korean voices: ko-KR-SunHiNeural, ko-KR-InJoonNeural)"
+        default="default", description="TTS voice ID (Zonos voice profile ID)"
     )
     tts_sample_rate: int = Field(default=24000, description="TTS audio sample rate")
     tts_chunk_size: int = Field(
@@ -160,8 +159,6 @@ class Settings(BaseSettings):
     @property
     def llm_api_key(self) -> str:
         """Get the API key for the configured LLM provider."""
-        if self.llm_provider == "anthropic":
-            return self.anthropic_api_key
         return self.openai_api_key
 
     def get_device(self) -> str:
