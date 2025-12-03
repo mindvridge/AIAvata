@@ -283,6 +283,16 @@ exit /b
 
 :after_zonos
 
+:: eSpeak-ng PATH 재확인 (서브루틴에서 설정한 값이 유지되지 않을 수 있음)
+if exist "C:\Program Files\eSpeak NG\espeak-ng.exe" (
+    set "PATH=C:\Program Files\eSpeak NG;%PATH%"
+    set "PHONEMIZER_ESPEAK_LIBRARY=C:\Program Files\eSpeak NG\libespeak-ng.dll"
+)
+if exist "C:\Program Files (x86)\eSpeak NG\espeak-ng.exe" (
+    set "PATH=C:\Program Files (x86)\eSpeak NG;%PATH%"
+    set "PHONEMIZER_ESPEAK_LIBRARY=C:\Program Files (x86)\eSpeak NG\libespeak-ng.dll"
+)
+
 python -c "import torch,openai,livekit,cv2,mediapipe" 2>nul
 if errorlevel 1 (
     echo       패키지 설치 중... (최초 1회, 약 5-10분 소요)
@@ -640,8 +650,18 @@ echo   종료: 이 창을 닫으세요
 echo ============================================================
 echo.
 
-:: 백엔드를 새 창에서 실행
-start "Backend - AI Avatar" cmd /k "cd /d %~dp0 && python -m uvicorn src.main:app --host 0.0.0.0 --port 8000 --reload"
+:: eSpeak-ng PATH 설정 (Zonos TTS용)
+set "ESPEAK_PATH="
+if exist "C:\Program Files\eSpeak NG\espeak-ng.exe" set "ESPEAK_PATH=C:\Program Files\eSpeak NG"
+if exist "C:\Program Files (x86)\eSpeak NG\espeak-ng.exe" set "ESPEAK_PATH=C:\Program Files (x86)\eSpeak NG"
+
+:: 백엔드를 새 창에서 실행 (eSpeak-ng PATH 포함)
+if defined ESPEAK_PATH (
+    start "Backend - AI Avatar" cmd /k "cd /d %~dp0 && set PATH=%ESPEAK_PATH%;%PATH% && set PHONEMIZER_ESPEAK_LIBRARY=%ESPEAK_PATH%\libespeak-ng.dll && python -m uvicorn src.main:app --host 0.0.0.0 --port 8000 --reload"
+) else (
+    echo       [경고] eSpeak-ng가 설치되지 않았습니다. Zonos TTS가 작동하지 않을 수 있습니다.
+    start "Backend - AI Avatar" cmd /k "cd /d %~dp0 && python -m uvicorn src.main:app --host 0.0.0.0 --port 8000 --reload"
+)
 
 :: 백엔드 서버가 준비될 때까지 대기
 echo       백엔드 서버 초기화 대기 중...
