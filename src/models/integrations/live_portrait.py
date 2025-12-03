@@ -14,8 +14,9 @@ GitHub: https://github.com/KwaiVGI/LivePortrait
 import asyncio
 import logging
 import os
+import sys
 from pathlib import Path
-from typing import Optional, Tuple, List, Dict, Any
+from typing import Optional, List, Dict, Any
 
 import cv2
 import numpy as np
@@ -24,6 +25,13 @@ logger = logging.getLogger(__name__)
 
 # LivePortrait 모델 경로
 LIVE_PORTRAIT_MODEL_DIR = os.getenv("LIVE_PORTRAIT_MODEL_DIR", "models/live_portrait")
+LIVE_PORTRAIT_SOURCE_DIR = os.getenv("LIVE_PORTRAIT_SOURCE_DIR", "external/LivePortrait")
+
+# LivePortrait 소스 디렉토리를 Python 경로에 추가
+_live_portrait_path = Path(LIVE_PORTRAIT_SOURCE_DIR).resolve()
+if _live_portrait_path.exists() and str(_live_portrait_path) not in sys.path:
+    sys.path.insert(0, str(_live_portrait_path))
+    logger.info(f"Added LivePortrait source directory to Python path: {_live_portrait_path}")
 
 
 class LivePortraitModel:
@@ -51,16 +59,15 @@ class LivePortraitModel:
         self.device = device
         self.fp16 = fp16
 
-        # 모델 컴포넌트
-        self._appearance_extractor = None
-        self._motion_extractor = None
-        self._warping_module = None
-        self._spade_generator = None
+        # LivePortrait 파이프라인
+        self._pipeline = None
+        self._cropper = None
 
         # 소스 이미지 캐시
         self._source_cache: Dict[str, Dict[str, Any]] = {}
 
         self._initialized = False
+        self._use_fallback = False
 
     async def initialize(self) -> bool:
         """
@@ -77,76 +84,62 @@ class LivePortraitModel:
         try:
             import torch
 
-            # 모델 디렉토리 확인
-            if not self.model_dir.exists():
-                logger.warning(f"LivePortrait model directory not found: {self.model_dir}")
-                logger.info("Run 'python tools/setup_models.py' to download models.")
-                self.model_dir.mkdir(parents=True, exist_ok=True)
+            # LivePortrait 소스 경로 확인
+            lp_src_path = Path(LIVE_PORTRAIT_SOURCE_DIR) / "src"
+            if not lp_src_path.exists():
+                logger.warning(f"LivePortrait source not found: {lp_src_path}")
+                self._use_fallback = True
                 self._initialized = True
                 return True
 
-            # LivePortrait 모델 로드 시도
+            # LivePortrait src를 Python 경로에 추가
+            if str(lp_src_path) not in sys.path:
+                sys.path.insert(0, str(lp_src_path))
+
             try:
-                # 실제 LivePortrait 패키지 임포트
-                from live_portrait.modules.appearance_feature_extractor import (
-                    AppearanceFeatureExtractor
+                # LivePortrait 모듈 임포트
+                from src.config.inference_config import InferenceConfig
+                from src.live_portrait_pipeline import LivePortraitPipeline
+
+                # 모델 경로 설정
+                model_config = {
+                    "checkpoint_F": str(self.model_dir / "base_models" / "appearance_feature_extractor.safetensors"),
+                    "checkpoint_M": str(self.model_dir / "base_models" / "motion_extractor.safetensors"),
+                    "checkpoint_G": str(self.model_dir / "base_models" / "spade_generator.safetensors"),
+                    "checkpoint_W": str(self.model_dir / "base_models" / "warping_module.safetensors"),
+                    "checkpoint_S": str(self.model_dir / "retargeting_models" / "stitching_retargeting_module.safetensors"),
+                }
+
+                # 모델 파일 확인
+                models_exist = all(Path(p).exists() for p in model_config.values())
+
+                if not models_exist:
+                    logger.warning("LivePortrait model files not found. Using fallback.")
+                    self._use_fallback = True
+                    self._initialized = True
+                    return True
+
+                # 설정 및 파이프라인 초기화
+                inference_cfg = InferenceConfig(
+                    device_id=0 if self.device == "cuda" else -1,
+                    flag_force_cpu=self.device != "cuda",
                 )
-                from live_portrait.modules.motion_extractor import MotionExtractor
-                from live_portrait.modules.warping_network import WarpingNetwork
-                from live_portrait.modules.spade_generator import SPADEGenerator
 
-                # 모델 로드
-                appearance_path = self.model_dir / "appearance_feature_extractor.pth"
-                motion_path = self.model_dir / "motion_extractor.pth"
-                warping_path = self.model_dir / "warping_module.pth"
-                spade_path = self.model_dir / "spade_generator.pth"
-
-                if appearance_path.exists():
-                    self._appearance_extractor = AppearanceFeatureExtractor()
-                    self._appearance_extractor.load_state_dict(
-                        torch.load(appearance_path, map_location=self.device)
-                    )
-                    self._appearance_extractor.to(self.device).eval()
-
-                if motion_path.exists():
-                    self._motion_extractor = MotionExtractor()
-                    self._motion_extractor.load_state_dict(
-                        torch.load(motion_path, map_location=self.device)
-                    )
-                    self._motion_extractor.to(self.device).eval()
-
-                if warping_path.exists():
-                    self._warping_module = WarpingNetwork()
-                    self._warping_module.load_state_dict(
-                        torch.load(warping_path, map_location=self.device)
-                    )
-                    self._warping_module.to(self.device).eval()
-
-                if spade_path.exists():
-                    self._spade_generator = SPADEGenerator()
-                    self._spade_generator.load_state_dict(
-                        torch.load(spade_path, map_location=self.device)
-                    )
-                    self._spade_generator.to(self.device).eval()
-
-                # FP16 변환
-                if self.fp16:
-                    for module in [
-                        self._appearance_extractor,
-                        self._motion_extractor,
-                        self._warping_module,
-                        self._spade_generator,
-                    ]:
-                        if module is not None:
-                            module.half()
-
-                logger.info("LivePortrait models loaded successfully")
-
-            except ImportError:
-                logger.warning(
-                    "LivePortrait package not installed. Using fallback implementation. "
-                    "Install from: https://github.com/KwaiVGI/LivePortrait"
+                self._pipeline = LivePortraitPipeline(
+                    inference_cfg=inference_cfg,
+                    crop_cfg=None,
                 )
+
+                logger.info("LivePortrait pipeline initialized successfully")
+
+            except ImportError as e:
+                logger.warning(f"Failed to import LivePortrait modules: {e}")
+                logger.info("Using fallback animation implementation")
+                self._use_fallback = True
+
+            except Exception as e:
+                logger.warning(f"Failed to initialize LivePortrait pipeline: {e}")
+                self._use_fallback = True
 
             self._initialized = True
             logger.info("LivePortrait initialization complete")
@@ -154,7 +147,9 @@ class LivePortraitModel:
 
         except Exception as e:
             logger.error(f"Failed to initialize LivePortrait: {e}")
-            return False
+            self._use_fallback = True
+            self._initialized = True
+            return True
 
     async def extract_source_features(
         self,
@@ -178,107 +173,32 @@ class LivePortraitModel:
         if source_id in self._source_cache:
             return self._source_cache[source_id]
 
-        features = {}
+        features = {"source_image": source_image}
 
-        try:
-            import torch
+        if not self._use_fallback and self._pipeline is not None:
+            try:
+                # LivePortrait 소스 특징 추출
+                # RGB로 변환
+                source_rgb = cv2.cvtColor(source_image, cv2.COLOR_BGR2RGB)
 
-            # 이미지 전처리
-            img_tensor = self._preprocess_image(source_image)
+                # 파이프라인으로 특징 추출
+                source_info = self._pipeline.prepare_source(source_rgb)
+                features["pipeline_source"] = source_info
 
-            if self._appearance_extractor is not None:
-                with torch.no_grad():
-                    appearance_features = self._appearance_extractor(img_tensor)
-                    features["appearance"] = appearance_features
+                logger.debug(f"Extracted LivePortrait features for {source_id}")
 
-            if self._motion_extractor is not None:
-                with torch.no_grad():
-                    source_motion = self._motion_extractor(img_tensor)
-                    features["motion"] = source_motion
+            except Exception as e:
+                logger.warning(f"Feature extraction failed: {e}")
 
-            features["source_image"] = source_image
-            features["image_tensor"] = img_tensor
-
-            # 캐시 저장
-            self._source_cache[source_id] = features
-
-        except Exception as e:
-            logger.error(f"Feature extraction error: {e}")
-            features["source_image"] = source_image
-
+        # 캐시 저장
+        self._source_cache[source_id] = features
         return features
-
-    async def generate_frame(
-        self,
-        source_features: Dict[str, Any],
-        motion_params: Dict[str, float],
-    ) -> np.ndarray:
-        """
-        모션 파라미터를 적용하여 새 프레임 생성
-
-        Args:
-            source_features: extract_source_features의 결과
-            motion_params: 모션 파라미터
-                - head_pitch: 고개 상하 (-1 ~ 1)
-                - head_yaw: 고개 좌우 (-1 ~ 1)
-                - head_roll: 고개 회전 (-1 ~ 1)
-                - expression_intensity: 표정 강도 (0 ~ 1)
-                - blink: 눈 깜빡임 (0 ~ 1)
-                - mouth_open: 입 벌림 (0 ~ 1)
-
-        Returns:
-            생성된 프레임
-        """
-        source_image = source_features.get("source_image")
-        if source_image is None:
-            raise ValueError("Source image not found in features")
-
-        # 모델이 없으면 폴백 사용
-        if self._warping_module is None:
-            return self._apply_simple_animation(source_image, motion_params)
-
-        try:
-            import torch
-
-            with torch.no_grad():
-                # 모션 벡터 생성
-                motion_vector = self._create_motion_vector(motion_params)
-
-                # 소스 모션에 델타 적용
-                source_motion = source_features.get("motion")
-                if source_motion is not None:
-                    target_motion = source_motion + motion_vector
-                else:
-                    target_motion = motion_vector
-
-                # 워핑
-                appearance = source_features.get("appearance")
-                if appearance is not None and self._warping_module is not None:
-                    warped = self._warping_module(
-                        appearance,
-                        source_motion,
-                        target_motion,
-                    )
-
-                    # SPADE 생성
-                    if self._spade_generator is not None:
-                        output = self._spade_generator(warped)
-                    else:
-                        output = warped
-
-                    # 후처리
-                    return self._postprocess_output(output)
-
-        except Exception as e:
-            logger.error(f"Frame generation error: {e}")
-
-        return self._apply_simple_animation(source_image, motion_params)
 
     async def generate_idle_sequence(
         self,
         source_image: np.ndarray,
         emotion: str = "neutral",
-        duration_seconds: float = 5.0,
+        duration_seconds: float = 2.0,
         fps: int = 30,
     ) -> List[np.ndarray]:
         """
@@ -305,73 +225,85 @@ class LivePortraitModel:
         # 감정별 모션 프로필
         motion_profile = self._get_emotion_motion_profile(emotion)
 
+        if not self._use_fallback and self._pipeline is not None and "pipeline_source" in features:
+            # LivePortrait 파이프라인으로 프레임 생성
+            try:
+                for frame_idx in range(total_frames):
+                    t = frame_idx / fps
+                    motion_params = self._calculate_idle_motion(t, frame_idx / total_frames, motion_profile)
+
+                    # 파이프라인으로 프레임 생성
+                    frame = await self._generate_frame_with_pipeline(
+                        features["pipeline_source"],
+                        motion_params
+                    )
+                    frames.append(frame)
+
+                return frames
+
+            except Exception as e:
+                logger.warning(f"Pipeline frame generation failed: {e}")
+                # Fallback으로 전환
+
+        # Fallback: 간단한 애니메이션
         for frame_idx in range(total_frames):
             t = frame_idx / fps
-            progress = frame_idx / total_frames
-
-            # 시간에 따른 모션 파라미터 계산
-            motion_params = self._calculate_idle_motion(
-                t, progress, motion_profile
-            )
-
-            # 프레임 생성
-            frame = await self.generate_frame(features, motion_params)
+            motion_params = self._calculate_idle_motion(t, frame_idx / total_frames, motion_profile)
+            frame = self._apply_simple_animation(source_image, motion_params)
             frames.append(frame)
 
         return frames
 
-    def _preprocess_image(self, image: np.ndarray) -> "torch.Tensor":
-        """이미지 전처리"""
-        import torch
-
-        # 256x256으로 리사이즈
-        resized = cv2.resize(image, (256, 256))
-
-        # BGR -> RGB
-        rgb = cv2.cvtColor(resized, cv2.COLOR_BGR2RGB)
-
-        # 정규화 및 텐서 변환
-        tensor = torch.from_numpy(rgb).float() / 255.0
-        tensor = tensor.permute(2, 0, 1).unsqueeze(0)
-        tensor = tensor.to(self.device)
-
-        if self.fp16:
-            tensor = tensor.half()
-
-        return tensor
-
-    def _postprocess_output(self, output: "torch.Tensor") -> np.ndarray:
-        """출력 후처리"""
-        # 텐서 -> numpy
-        output_np = output.squeeze(0).permute(1, 2, 0).cpu().float().numpy()
-        output_np = (output_np * 255).clip(0, 255).astype(np.uint8)
-
-        # RGB -> BGR
-        output_bgr = cv2.cvtColor(output_np, cv2.COLOR_RGB2BGR)
-
-        return output_bgr
-
-    def _create_motion_vector(
+    async def _generate_frame_with_pipeline(
         self,
-        params: Dict[str, float],
-    ) -> "torch.Tensor":
-        """모션 파라미터에서 벡터 생성"""
+        source_info: Any,
+        motion_params: Dict[str, float],
+    ) -> np.ndarray:
+        """LivePortrait 파이프라인으로 프레임 생성"""
+        try:
+            import torch
+
+            # 모션 파라미터를 드라이빙 정보로 변환
+            driving_info = self._create_driving_info(motion_params)
+
+            # 파이프라인 추론
+            result = self._pipeline.execute(source_info, driving_info)
+
+            # 결과 이미지 추출 및 BGR 변환
+            if result is not None:
+                output_rgb = result["out"]
+                output_bgr = cv2.cvtColor(output_rgb, cv2.COLOR_RGB2BGR)
+                return output_bgr
+
+        except Exception as e:
+            logger.debug(f"Pipeline execution error: {e}")
+
+        # 실패 시 원본 반환
+        return source_info.get("source_image", np.zeros((512, 512, 3), dtype=np.uint8))
+
+    def _create_driving_info(self, motion_params: Dict[str, float]) -> Dict[str, Any]:
+        """모션 파라미터에서 드라이빙 정보 생성"""
         import torch
 
-        # 기본 모션 벡터 (21개 파라미터 예시)
-        vector = torch.zeros(1, 21).to(self.device)
+        # LivePortrait 드라이빙 형식
+        driving_info = {
+            "pitch": torch.tensor([[motion_params.get("head_pitch", 0) * 30]]),
+            "yaw": torch.tensor([[motion_params.get("head_yaw", 0) * 30]]),
+            "roll": torch.tensor([[motion_params.get("head_roll", 0) * 15]]),
+            "exp": torch.zeros(1, 63),  # Expression coefficients
+        }
 
-        # 파라미터 매핑
-        vector[0, 0] = params.get("head_pitch", 0) * 0.3
-        vector[0, 1] = params.get("head_yaw", 0) * 0.3
-        vector[0, 2] = params.get("head_roll", 0) * 0.1
-        vector[0, 10] = params.get("blink", 0) * 0.5
-        vector[0, 15] = params.get("mouth_open", 0) * 0.4
+        # 눈 깜빡임
+        blink = motion_params.get("blink", 0)
+        if blink > 0:
+            driving_info["exp"][0, 0] = blink  # 눈 감김 coefficient
 
-        if self.fp16:
-            vector = vector.half()
+        # 입 열림
+        mouth_open = motion_params.get("mouth_open", 0)
+        if mouth_open > 0:
+            driving_info["exp"][0, 25] = mouth_open  # 입 열림 coefficient
 
-        return vector
+        return driving_info
 
     def _get_emotion_motion_profile(self, emotion: str) -> Dict[str, Any]:
         """감정별 모션 프로필"""
@@ -403,6 +335,37 @@ class LivePortraitModel:
                 "blink_frequency": 2.5,
                 "look_up": 0.15,
             },
+            "surprised": {
+                "head_movement": 0.03,
+                "blink_frequency": 5.0,
+                "expression_base": 0.4,
+            },
+            "angry": {
+                "head_movement": 0.015,
+                "blink_frequency": 2.0,
+                "expression_base": -0.3,
+            },
+            "fearful": {
+                "head_movement": 0.025,
+                "blink_frequency": 6.0,
+                "expression_base": 0.2,
+            },
+            "disgusted": {
+                "head_movement": 0.01,
+                "blink_frequency": 2.5,
+                "expression_base": -0.25,
+            },
+            "sympathetic": {
+                "head_movement": 0.02,
+                "blink_frequency": 3.0,
+                "head_tilt": 0.05,
+                "nod_frequency": 0.5,
+            },
+            "concerned": {
+                "head_movement": 0.015,
+                "blink_frequency": 3.5,
+                "expression_base": -0.1,
+            },
         }
         return profiles.get(emotion, profiles["neutral"])
 
@@ -417,43 +380,47 @@ class LivePortraitModel:
         blink_freq = profile.get("blink_frequency", 3.0)
 
         params = {
-            # 자연스러운 머리 움직임
-            "head_pitch": np.sin(t * 0.5 * np.pi) * head_movement,
-            "head_yaw": np.sin(t * 0.3 * np.pi) * head_movement,
-            "head_roll": np.sin(t * 0.2 * np.pi) * head_movement * 0.5,
+            # 자연스러운 머리 움직임 (사인/코사인 조합)
+            "head_pitch": np.sin(t * 0.5 * np.pi) * head_movement + np.sin(t * 0.17 * np.pi) * head_movement * 0.5,
+            "head_yaw": np.sin(t * 0.3 * np.pi) * head_movement + np.cos(t * 0.23 * np.pi) * head_movement * 0.3,
+            "head_roll": np.sin(t * 0.2 * np.pi) * head_movement * 0.3,
 
             # 표정 강도
             "expression_intensity": profile.get("expression_base", 0),
 
-            # 눈 깜빡임 (주기적)
+            # 눈 깜빡임 (자연스러운 주기)
             "blink": self._calculate_blink(t, blink_freq),
 
-            # 입 움직임 (미세)
-            "mouth_open": abs(np.sin(t * 0.4 * np.pi)) * 0.02,
+            # 입 움직임 (호흡과 연동)
+            "mouth_open": abs(np.sin(t * 0.4 * np.pi)) * 0.015,
         }
 
         # 고개 끄덕임 (listening)
         if "nod_frequency" in profile:
             nod_freq = profile["nod_frequency"]
-            params["head_pitch"] += np.sin(t * nod_freq * 2 * np.pi) * 0.05
+            params["head_pitch"] += np.sin(t * nod_freq * 2 * np.pi) * 0.04
 
         # 위 쳐다보기 (thinking)
         if "look_up" in profile:
-            params["head_pitch"] -= profile["look_up"]
+            params["head_pitch"] -= profile["look_up"] * 0.5
+
+        # 고개 기울임
+        if "head_tilt" in profile:
+            params["head_roll"] += profile["head_tilt"]
 
         return params
 
     def _calculate_blink(self, t: float, frequency: float) -> float:
-        """눈 깜빡임 계산"""
+        """자연스러운 눈 깜빡임 계산"""
         # 불규칙한 깜빡임 시뮬레이션
         blink_time = t * frequency
         blink_phase = blink_time % 1.0
 
-        # 빠른 깜빡임 (0.1초)
-        if blink_phase < 0.05:
-            return blink_phase / 0.05
-        elif blink_phase < 0.1:
-            return 1.0 - (blink_phase - 0.05) / 0.05
+        # 빠른 깜빡임 (0.15초 주기)
+        if blink_phase < 0.075:
+            return blink_phase / 0.075
+        elif blink_phase < 0.15:
+            return 1.0 - (blink_phase - 0.075) / 0.075
         return 0.0
 
     def _apply_simple_animation(
@@ -470,23 +437,34 @@ class LivePortraitModel:
         result = image.copy()
 
         # 머리 움직임 시뮬레이션 (아핀 변환)
-        pitch = params.get("head_pitch", 0) * 10
-        yaw = params.get("head_yaw", 0) * 10
+        pitch = params.get("head_pitch", 0) * 8
+        yaw = params.get("head_yaw", 0) * 8
+        roll = params.get("head_roll", 0) * 3
 
-        # 변환 매트릭스
-        M = np.float32([
-            [1, 0, yaw],
-            [0, 1, pitch],
-        ])
-        result = cv2.warpAffine(result, M, (w, h), borderMode=cv2.BORDER_REFLECT)
+        # 중심점
+        center = (w // 2, h // 2)
 
-        # 눈 깜빡임 (상단 영역 어둡게)
+        # 회전 + 이동 변환
+        rotation_matrix = cv2.getRotationMatrix2D(center, roll, 1.0)
+        rotation_matrix[0, 2] += yaw
+        rotation_matrix[1, 2] += pitch
+
+        result = cv2.warpAffine(
+            result,
+            rotation_matrix,
+            (w, h),
+            borderMode=cv2.BORDER_REFLECT
+        )
+
+        # 눈 깜빡임 효과 (상단 영역 어둡게)
         blink = params.get("blink", 0)
         if blink > 0.1:
-            eye_region = result[int(h * 0.25):int(h * 0.4), :]
-            darkness = int(blink * 50)
-            eye_region = np.clip(eye_region.astype(np.int16) - darkness, 0, 255).astype(np.uint8)
-            result[int(h * 0.25):int(h * 0.4), :] = eye_region
+            eye_top = int(h * 0.25)
+            eye_bottom = int(h * 0.4)
+            eye_region = result[eye_top:eye_bottom, :].astype(np.float32)
+            darkness = blink * 0.4
+            eye_region = eye_region * (1 - darkness)
+            result[eye_top:eye_bottom, :] = np.clip(eye_region, 0, 255).astype(np.uint8)
 
         return result
 
@@ -496,19 +474,16 @@ class LivePortraitModel:
 
     async def cleanup(self) -> None:
         """리소스 정리"""
-        self._appearance_extractor = None
-        self._motion_extractor = None
-        self._warping_module = None
-        self._spade_generator = None
+        self._pipeline = None
+        self._cropper = None
         self._source_cache.clear()
         self._initialized = False
+        self._use_fallback = False
 
         try:
             import torch
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
-            elif torch.backends.mps.is_available():
-                torch.mps.empty_cache()
         except (ImportError, AttributeError):
             pass
 

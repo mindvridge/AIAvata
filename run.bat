@@ -344,6 +344,51 @@ if not exist "models\face-parse-bisent" (
 )
 
 :: ============================================================
+:: 6.5 LivePortrait 설치 (Idle 애니메이션)
+:: ============================================================
+echo.
+echo [6.5/10] LivePortrait 설치 확인 중...
+
+:: LivePortrait 소스 코드 클론
+if not exist "external\LivePortrait\src" (
+    echo       LivePortrait 소스 코드 다운로드 중...
+    if not exist "external" mkdir external
+    cd external
+
+    if exist "LivePortrait" (
+        rmdir /s /q LivePortrait 2>nul
+    )
+
+    git clone --depth 1 https://github.com/KwaiVGI/LivePortrait.git
+    cd ..
+    echo       LivePortrait 소스 다운로드 완료!
+) else (
+    echo       LivePortrait 소스 확인됨
+)
+
+:: LivePortrait 의존성 설치
+python -c "import onnxruntime" 2>nul
+if errorlevel 1 (
+    echo       LivePortrait 의존성 설치 중...
+    pip install onnxruntime-gpu onnx -q
+    pip install tyro rich tqdm -q
+    echo       LivePortrait 의존성 설치 완료!
+)
+
+:: LivePortrait 모델 파일 다운로드
+if not exist "models\live_portrait\appearance_feature_extractor.safetensors" (
+    echo       LivePortrait 모델 파일 다운로드 중... (약 400MB)
+
+    if not exist "models\live_portrait" mkdir "models\live_portrait"
+
+    :: HuggingFace에서 LivePortrait 모델 다운로드
+    python -c "from huggingface_hub import snapshot_download; snapshot_download('KwaiVGI/LivePortrait', local_dir='models/live_portrait', local_dir_use_symlinks=False)"
+    echo       LivePortrait 모델 다운로드 완료!
+) else (
+    echo       LivePortrait 모델 확인됨
+)
+
+:: ============================================================
 :: 7. 프론트엔드 패키지 설치
 :: ============================================================
 echo.
