@@ -648,14 +648,49 @@ class AvatarRenderer:
         self, frame: np.ndarray, audio_chunk: bytes
     ) -> np.ndarray:
         """
-        빠른 립싱크 시뮬레이션 (fast_lipsync=True 시 사용)
+        립싱크 시뮬레이션 (MuseTalk 대체)
 
-        참고: 이 모드는 실제 입 애니메이션 없이 원본 프레임을 반환합니다.
-        자연스러운 립싱크를 원하면 fast_lipsync=False로 설정하여 MuseTalk을 사용하세요.
+        오디오 레벨에 따라 입 부분 밝기를 미세하게 조절하여 말하는 효과 생성
         """
-        # fast_lipsync 모드에서는 그냥 원본 프레임 반환 (인위적인 도형 그리지 않음)
-        # MuseTalk을 사용하지 않으면 립싱크 없이 원본 이미지 표시
-        return frame
+        try:
+            # 오디오 레벨 계산
+            audio_array = np.frombuffer(audio_chunk, dtype=np.int16).astype(np.float32)
+            if len(audio_array) == 0:
+                return frame
+
+            # 에너지 레벨 계산 (0.0 ~ 1.0)
+            energy = np.sqrt(np.mean(audio_array ** 2)) / 32767.0
+
+            # 너무 낮은 에너지면 처리하지 않음
+            if energy < 0.01:
+                return frame
+
+            result = frame.copy()
+            h, w = frame.shape[:2]
+
+            # 입 영역 (하단 1/3, 중앙 영역)
+            mouth_top = int(h * 0.6)
+            mouth_bottom = int(h * 0.8)
+            mouth_left = int(w * 0.35)
+            mouth_right = int(w * 0.65)
+
+            # 입 영역에 미세한 밝기 변화 적용
+            mouth_region = result[mouth_top:mouth_bottom, mouth_left:mouth_right].astype(np.float32)
+
+            # 오디오 에너지에 따른 밝기 변화 (최대 10% 밝게)
+            brightness_factor = 1.0 + (energy * 0.1)
+            mouth_region = mouth_region * brightness_factor
+
+            # 클리핑
+            result[mouth_top:mouth_bottom, mouth_left:mouth_right] = np.clip(
+                mouth_region, 0, 255
+            ).astype(np.uint8)
+
+            return result
+
+        except Exception as e:
+            logger.error(f"Lip sync simulation error: {e}")
+            return frame
 
     def _detect_mouth_region(
         self, frame: np.ndarray
