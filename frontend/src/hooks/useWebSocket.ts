@@ -49,10 +49,23 @@ export function useWebSocket(options: UseWebSocketOptions): UseWebSocketReturn {
   const isIntentionalDisconnect = useRef(false);
   const urlRef = useRef<string>(url); // URL을 ref로 관리하여 항상 최신 값 사용
 
+  // Callback refs to avoid stale closures in WebSocket handlers
+  const onVideoFrameRef = useRef(onVideoFrame);
+  const onMessageRef = useRef(onMessage);
+
   // URL prop이 변경되면 ref 업데이트
   useEffect(() => {
     urlRef.current = url;
   }, [url]);
+
+  // Callback refs 업데이트 - 항상 최신 콜백 참조 유지
+  useEffect(() => {
+    onVideoFrameRef.current = onVideoFrame;
+  }, [onVideoFrame]);
+
+  useEffect(() => {
+    onMessageRef.current = onMessage;
+  }, [onMessage]);
 
   const handleMessage = useCallback((event: MessageEvent) => {
     // Binary data is video frame
@@ -64,10 +77,10 @@ export function useWebSocket(options: UseWebSocketOptions): UseWebSocketReturn {
       if (event.data instanceof Blob) {
         event.data.arrayBuffer().then((buffer) => {
           console.log('📹 Converted Blob to ArrayBuffer:', buffer.byteLength, 'bytes');
-          onVideoFrame?.(buffer);
+          onVideoFrameRef.current?.(buffer);
         });
       } else {
-        onVideoFrame?.(event.data);
+        onVideoFrameRef.current?.(event.data);
       }
       return;
     }
@@ -105,11 +118,11 @@ export function useWebSocket(options: UseWebSocketOptions): UseWebSocketReturn {
         console.error('WebSocket error:', (message as { error: string }).error);
       }
 
-      onMessage?.(message);
+      onMessageRef.current?.(message);
     } catch (err) {
       console.error('Failed to parse WebSocket message:', err);
     }
-  }, [onMessage, onVideoFrame]);
+  }, []); // No dependencies - uses refs for callbacks to avoid stale closures
 
   const connect = useCallback((customUrl?: string) => {
     if (wsRef.current?.readyState === WebSocket.OPEN) {
