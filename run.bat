@@ -677,8 +677,26 @@ if not exist "external\LivePortrait\src" (
     git clone --depth 1 https://github.com/KwaiVGI/LivePortrait.git
     cd ..
     echo       LivePortrait 소스 다운로드 완료!
+
+    REM Create __init__.py files for package import (required for Python imports)
+    echo       LivePortrait 패키지 초기화 파일 생성 중...
+    if exist "external\LivePortrait\src" (
+        type nul > "external\LivePortrait\src\__init__.py"
+        type nul > "external\LivePortrait\src\config\__init__.py"
+        type nul > "external\LivePortrait\src\utils\__init__.py"
+        type nul > "external\LivePortrait\src\modules\__init__.py"
+        echo       __init__.py 파일 생성 완료!
+    )
 ) else (
     echo       LivePortrait 소스 확인됨
+    REM Ensure __init__.py files exist
+    if not exist "external\LivePortrait\src\__init__.py" (
+        type nul > "external\LivePortrait\src\__init__.py"
+        type nul > "external\LivePortrait\src\config\__init__.py"
+        type nul > "external\LivePortrait\src\utils\__init__.py"
+        type nul > "external\LivePortrait\src\modules\__init__.py"
+        echo       __init__.py 파일 생성됨
+    )
 )
 
 REM Install LivePortrait dependencies

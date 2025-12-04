@@ -27,11 +27,20 @@ logger = logging.getLogger(__name__)
 LIVE_PORTRAIT_MODEL_DIR = os.getenv("LIVE_PORTRAIT_MODEL_DIR", "models/live_portrait")
 LIVE_PORTRAIT_SOURCE_DIR = os.getenv("LIVE_PORTRAIT_SOURCE_DIR", "external/LivePortrait")
 
-# LivePortrait 소스 디렉토리를 Python 경로에 추가
+# LivePortrait 루트 디렉토리를 Python 경로에 추가 (src 디렉토리가 아닌 루트)
 _live_portrait_path = Path(LIVE_PORTRAIT_SOURCE_DIR).resolve()
 if _live_portrait_path.exists() and str(_live_portrait_path) not in sys.path:
     sys.path.insert(0, str(_live_portrait_path))
-    logger.info(f"Added LivePortrait source directory to Python path: {_live_portrait_path}")
+    logger.info(f"Added LivePortrait root directory to Python path: {_live_portrait_path}")
+
+    # __init__.py 파일이 없으면 생성 (패키지로 인식되도록)
+    src_init = _live_portrait_path / "src" / "__init__.py"
+    if not src_init.exists():
+        try:
+            src_init.touch()
+            logger.info(f"Created {src_init}")
+        except Exception:
+            pass
 
 
 class LivePortraitModel:
@@ -94,10 +103,6 @@ class LivePortraitModel:
                 return True
 
             try:
-                # importlib를 사용하여 LivePortrait 모듈 직접 로드 (경로 충돌 방지)
-                import importlib.util
-                import importlib.machinery
-
                 # 모델 파일 경로 설정 (HuggingFace 다운로드 구조에 맞게)
                 # 우선순위: liveportrait/base_models/*.pth > *.safetensors
                 lp_base_models = self.model_dir / "liveportrait" / "base_models"
@@ -148,46 +153,56 @@ class LivePortraitModel:
                     return True
 
                 # 모델 파일이 있으면 계속 진행
-                # LivePortrait 소스 경로에서 직접 모듈 로드 (sys.path/modules 오염 없이)
+                # LivePortrait를 패키지로 임포트 (sys.path에 루트 디렉토리 추가됨)
                 try:
-                    # 직접 spec를 사용하여 로드 (패키지 충돌 방지)
-                    config_path = lp_src_path / "config" / "inference_config.py"
-                    pipeline_path = lp_src_path / "live_portrait_pipeline.py"
+                    # LivePortrait 루트를 sys.path에 추가
+                    lp_root = lp_src_path.parent
+                    if str(lp_root) not in sys.path:
+                        sys.path.insert(0, str(lp_root))
 
-                    if config_path.exists() and pipeline_path.exists():
-                        # inference_config 모듈 로드
-                        spec_config = importlib.util.spec_from_file_location(
-                            "lp_inference_config", str(config_path)
-                        )
-                        lp_config_module = importlib.util.module_from_spec(spec_config)
-                        spec_config.loader.exec_module(lp_config_module)
-                        InferenceConfig = lp_config_module.InferenceConfig
+                    # __init__.py 파일 생성 (패키지로 인식되도록)
+                    for subdir in ["", "config", "utils", "modules"]:
+                        init_file = lp_src_path / subdir / "__init__.py" if subdir else lp_src_path / "__init__.py"
+                        if not init_file.exists():
+                            try:
+                                init_file.touch()
+                            except Exception:
+                                pass
 
-                        # 설정 및 파이프라인 초기화
-                        inference_cfg = InferenceConfig(
-                            device_id=0 if self.device == "cuda" else -1,
-                            flag_force_cpu=self.device != "cuda",
-                        )
+                    # 이제 패키지로 임포트
+                    from src.config.inference_config import InferenceConfig
+                    from src.config.crop_config import CropConfig
+                    from src.live_portrait_pipeline import LivePortraitPipeline
 
-                        # 파이프라인은 많은 의존성이 있어 현재 미지원
-                        logger.error("❌ LivePortrait 파이프라인 로드 실패!")
-                        logger.error("   LivePortrait는 복잡한 의존성으로 인해 현재 실시간 애니메이션을 지원하지 않습니다.")
-                        logger.error("   Idle 애니메이션은 정적 이미지를 사용합니다.")
-                        self._use_fallback = True
-                    else:
-                        logger.error("❌ LivePortrait 소스 파일을 찾을 수 없습니다!")
-                        logger.error(f"   필요한 경로: {config_path}, {pipeline_path}")
-                        logger.error("   해결방법: run.bat를 다시 실행하거나 external/LivePortrait 폴더를 확인하세요.")
-                        self._use_fallback = True
+                    logger.info("✅ LivePortrait 모듈 임포트 성공!")
+
+                    # 설정 및 파이프라인 초기화
+                    inference_cfg = InferenceConfig(
+                        device_id=0 if self.device == "cuda" else -1,
+                        flag_force_cpu=self.device != "cuda",
+                    )
+                    crop_cfg = CropConfig()
+
+                    # 파이프라인 초기화
+                    self._pipeline = LivePortraitPipeline(
+                        inference_cfg=inference_cfg,
+                        crop_cfg=crop_cfg
+                    )
+                    logger.info("✅ LivePortrait 파이프라인 초기화 성공!")
+
+                except ImportError as e:
+                    logger.error(f"❌ LivePortrait 모듈 임포트 실패: {e}")
+                    logger.error("   해결방법: run.bat를 다시 실행하거나 LivePortrait 의존성을 설치하세요.")
+                    logger.error("   pip install -r external/LivePortrait/requirements.txt")
+                    self._use_fallback = True
 
                 except Exception as e:
-                    logger.error(f"❌ LivePortrait 모듈 로드 실패: {e}")
-                    logger.error("   이 오류는 LivePortrait의 상대 import 문제로 발생합니다.")
-                    logger.error("   Idle 애니메이션은 정적 이미지를 사용합니다.")
+                    logger.error(f"❌ LivePortrait 파이프라인 초기화 실패: {e}")
+                    logger.error("   Idle 애니메이션은 fallback 모드를 사용합니다.")
                     self._use_fallback = True
 
             except Exception as e:
-                logger.error(f"❌ LivePortrait 파이프라인 초기화 실패: {e}")
+                logger.error(f"❌ LivePortrait 설정 중 오류: {e}")
                 logger.error("   해결방법: 모델 파일을 확인하세요 (models/live_portrait/)")
                 self._use_fallback = True
 
