@@ -557,23 +557,44 @@ class MuseTalkModel:
                 # 원본 크기로 리사이즈
                 result_256 = cv2.resize(output_np, (256, 256), interpolation=cv2.INTER_LINEAR)
 
-                # 🔑 핵심: 입 영역만 합성 (전체 프레임 대체 X)
-                # Face parser로 마스크 생성하거나, 간단하게 하단 영역만 합성
-
                 # 원본 프레임을 256x256으로 리사이즈
                 source_256 = cv2.resize(source_frame, (256, 256))
 
-                # 입/턱 영역 마스크 생성 (하단 40% 영역)
-                mask = np.zeros((256, 256), dtype=np.float32)
-                mouth_top = int(256 * 0.55)  # 입 시작 위치
-                mouth_bottom = 256
-                mask[mouth_top:mouth_bottom, :] = 1.0
+                # 🔑 핵심: Face Parser로 입 영역 마스크 생성
+                mask = None
+                if self._face_parser is not None:
+                    try:
+                        # Face Parser로 정확한 입 영역 마스크 생성
+                        parsing_result = self._face_parser(source_256)
+                        if parsing_result is not None:
+                            # MuseTalk face parsing labels:
+                            # 11: upper lip, 12: lower lip, 13: teeth
+                            # 10: nose (선택적으로 포함)
+                            lip_mask = np.zeros((256, 256), dtype=np.float32)
+                            if hasattr(parsing_result, 'shape') and len(parsing_result.shape) >= 2:
+                                lip_mask[(parsing_result == 11) | (parsing_result == 12) | (parsing_result == 13)] = 1.0
+                                # 마스크가 너무 작으면 확장
+                                if np.sum(lip_mask) > 100:  # 최소 픽셀 수
+                                    # 마스크 확장 (dilate)
+                                    kernel = np.ones((5, 5), np.uint8)
+                                    lip_mask = cv2.dilate(lip_mask, kernel, iterations=3)
+                                    # 가우시안 블러로 부드럽게
+                                    lip_mask = cv2.GaussianBlur(lip_mask, (21, 21), 0)
+                                    mask = lip_mask
+                                    logger.debug(f"Face parser mask created: {np.sum(mask > 0)} pixels")
+                    except Exception as e:
+                        logger.warning(f"Face parser mask failed: {e}")
+                        mask = None
 
-                # 부드러운 블렌딩을 위한 그라데이션
-                gradient_height = int(256 * 0.1)  # 상단 10% 그라데이션
-                for i in range(gradient_height):
-                    alpha = i / gradient_height
-                    mask[mouth_top + i, :] = alpha
+                # Face Parser 실패 시 간단한 타원형 마스크 사용
+                if mask is None:
+                    mask = np.zeros((256, 256), dtype=np.float32)
+                    # 입 위치 추정 (얼굴 중앙 하단)
+                    center_x, center_y = 128, 180  # 대략적인 입 중심
+                    axes = (50, 30)  # 타원 크기 (가로, 세로)
+                    cv2.ellipse(mask, (center_x, center_y), axes, 0, 0, 360, 1.0, -1)
+                    # 가우시안 블러로 부드럽게
+                    mask = cv2.GaussianBlur(mask, (31, 31), 0)
 
                 # 3채널로 확장
                 mask_3ch = np.stack([mask, mask, mask], axis=-1)
