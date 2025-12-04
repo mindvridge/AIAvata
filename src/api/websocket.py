@@ -552,8 +552,11 @@ class AvatarWebSocketHandler:
 
                 try:
                     frame_count += 1
-                    if frame_count % 30 == 0:  # 매 30프레임마다 로그
-                        logger.debug(f"Sent {frame_count} idle frames to connection {connection_id}")
+                    # 처음 몇 프레임은 INFO 레벨로 로깅
+                    if frame_count <= 3:
+                        logger.info(f"🎬 Idle frame #{frame_count} sent ({len(frame.data)} bytes)")
+                    elif frame_count % 30 == 0:  # 매 30프레임마다 로그
+                        logger.info(f"🎬 Sent {frame_count} idle frames to connection {connection_id}")
 
                     await websocket.send_bytes(frame.data)
                 except Exception as e:

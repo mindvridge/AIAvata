@@ -47,6 +47,7 @@ CONNECTION_STATE_TRANSITIONS: dict[ConnectionState, set[ConnectionState]] = {
     ConnectionState.CONNECTED: {
         ConnectionState.IDLE_STREAMING,
         ConnectionState.PROCESSING,
+        ConnectionState.SPEAKING,  # 채팅 응답 시 idle 취소 후 직접 전환 허용
         ConnectionState.DISCONNECTED,
         ConnectionState.ERROR,
     },
