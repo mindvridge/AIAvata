@@ -479,7 +479,9 @@ class MuseTalkModel:
                     return source_frame
                 
                 # VAE 디코딩
-                logger.info("🔄 VAE decoding starting...")
+                vae_device = next(self._vae.vae.parameters()).device
+                vae_dtype = next(self._vae.vae.parameters()).dtype
+                logger.info(f"🔄 VAE decoding starting... (VAE device={vae_device}, dtype={vae_dtype})")
                 pred_latents = pred_latents.to(dtype=self._vae.vae.dtype)
                 recon = self._vae.decode_latents(pred_latents)
                 logger.info(f"✅ VAE decoded: type={type(recon)}, shape={recon.shape if hasattr(recon, 'shape') else 'N/A'}")

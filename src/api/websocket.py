@@ -800,7 +800,7 @@ class AvatarWebSocketHandler:
 
             # 립싱크가 적용된 비디오 프레임 스트림 생성
             try:
-                logger.debug(f"Starting lip sync rendering: sample_rate={self.pipeline.tts.sample_rate}, audio_bytes={len(audio_data_bytes)}")
+                logger.info(f"🎬 Starting lip sync rendering: sample_rate={self.pipeline.tts.sample_rate}, audio_bytes={len(audio_data_bytes)}")
                 await self._send_status(websocket, "speaking")
 
                 frame_count = 0
@@ -817,10 +817,13 @@ class AvatarWebSocketHandler:
                     await websocket.send_bytes(frame.data)
                     frame_count += 1
 
-                    if frame_count % 30 == 0:  # 30프레임마다 로그
-                        logger.debug(f"Sent {frame_count} lip sync frames")
+                    # 처음 몇 프레임은 INFO 레벨로 로깅
+                    if frame_count <= 3:
+                        logger.info(f"🎤 Lip sync frame #{frame_count} sent ({len(frame.data)} bytes)")
+                    elif frame_count % 30 == 0:  # 30프레임마다 로그
+                        logger.info(f"🎤 Sent {frame_count} lip sync frames")
 
-                logger.debug(f"Lipsync video stream completed: {frame_count} frames sent")
+                logger.info(f"✅ Lip sync video stream completed: {frame_count} frames sent")
 
                 # 립싱크 완료 후 CONNECTED 상태로 전이 및 idle 스트림 재시작
                 if connection_id in self._active_connections:
