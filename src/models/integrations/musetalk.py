@@ -565,23 +565,38 @@ class MuseTalkModel:
                 if self._face_parser is not None:
                     try:
                         # Face Parser로 정확한 입 영역 마스크 생성
+                        # FaceParsing은 PIL Image를 반환하므로 numpy로 변환 필요
+                        from PIL import Image
                         parsing_result = self._face_parser(source_256)
                         if parsing_result is not None:
-                            # MuseTalk face parsing labels:
-                            # 11: upper lip, 12: lower lip, 13: teeth
-                            # 10: nose (선택적으로 포함)
+                            # PIL Image → numpy array 변환
+                            if isinstance(parsing_result, Image.Image):
+                                parsing_array = np.array(parsing_result)
+                            else:
+                                parsing_array = parsing_result
+
+                            # MuseTalk face parsing labels (raw mode):
+                            # 실제 반환값은 255 (face) vs 0 (background)
+                            # 입 영역만 추출하려면 하단 영역 마스크 생성
                             lip_mask = np.zeros((256, 256), dtype=np.float32)
-                            if hasattr(parsing_result, 'shape') and len(parsing_result.shape) >= 2:
-                                lip_mask[(parsing_result == 11) | (parsing_result == 12) | (parsing_result == 13)] = 1.0
-                                # 마스크가 너무 작으면 확장
-                                if np.sum(lip_mask) > 100:  # 최소 픽셀 수
-                                    # 마스크 확장 (dilate)
-                                    kernel = np.ones((5, 5), np.uint8)
-                                    lip_mask = cv2.dilate(lip_mask, kernel, iterations=3)
-                                    # 가우시안 블러로 부드럽게
-                                    lip_mask = cv2.GaussianBlur(lip_mask, (21, 21), 0)
-                                    mask = lip_mask
-                                    logger.debug(f"Face parser mask created: {np.sum(mask > 0)} pixels")
+
+                            if hasattr(parsing_array, 'shape') and len(parsing_array.shape) >= 2:
+                                # 얼굴 영역 (255) 확인
+                                face_mask = (parsing_array > 128).astype(np.float32)
+
+                                if np.sum(face_mask) > 1000:  # 얼굴이 감지된 경우
+                                    # 입 영역: 얼굴의 하단 50% 영역
+                                    h_mask = parsing_array.shape[0]
+                                    lip_region_start = int(h_mask * 0.5)
+                                    lip_mask[lip_region_start:, :] = face_mask[lip_region_start:, :]
+
+                                    # 마스크 확장 및 블러
+                                    if np.sum(lip_mask) > 100:
+                                        kernel = np.ones((5, 5), np.uint8)
+                                        lip_mask = cv2.dilate(lip_mask, kernel, iterations=2)
+                                        lip_mask = cv2.GaussianBlur(lip_mask, (21, 21), 0)
+                                        mask = lip_mask
+                                        logger.debug(f"Face parser mask created: {np.sum(mask > 0)} pixels")
                     except Exception as e:
                         logger.warning(f"Face parser mask failed: {e}")
                         mask = None
