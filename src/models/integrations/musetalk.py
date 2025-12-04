@@ -346,10 +346,12 @@ class MuseTalkModel:
         if not self._initialized:
             await self.initialize()
 
-        # 모델이 로드되지 않았으면 간단한 시뮬레이션 사용
+        # 모델이 로드되지 않았으면 에러 표시
         if self._unet is None:
-            logger.warning("⚠️ UNet not loaded, using simple lipsync simulation")
-            return self._apply_simple_lipsync(source_frame, audio_chunk)
+            logger.error("❌ MuseTalk UNet 모델이 로드되지 않았습니다!")
+            logger.error("   필요한 파일: models/musetalk/musetalkV15/unet.pth")
+            logger.error("   해결방법: run.bat를 다시 실행하거나 수동으로 다운로드하세요.")
+            return source_frame
 
         try:
             import torch
@@ -359,10 +361,12 @@ class MuseTalkModel:
             audio_features = self._extract_audio_features(audio_chunk, audio_sample_rate)
             logger.info(f"🎤 Audio features extracted: shape={audio_features.shape}")
 
-            # VAE가 없으면 fallback
+            # VAE가 없으면 에러 표시
             if self._vae is None:
-                logger.warning("⚠️ VAE not available, using simple fallback")
-                return self._apply_simple_lipsync(source_frame, audio_chunk)
+                logger.error("❌ MuseTalk VAE 모델이 로드되지 않았습니다!")
+                logger.error("   필요한 파일: models/musetalk/sd-vae-ft-mse/")
+                logger.error("   해결방법: run.bat를 다시 실행하거나 수동으로 다운로드하세요.")
+                return source_frame
             
             # 얼굴 영역 추출 (전체 프레임 사용, 256x256으로 리사이즈)
             import cv2
@@ -465,15 +469,14 @@ class MuseTalkModel:
 
                     logger.info(f"✅ UNet output: {pred_latents.shape}")
                 except Exception as e:
-                    logger.error(f"❌ UNet inference failed: {e}", exc_info=True)
-                    logger.error(f"Error details - latent_input shape: {latent_input.shape}, dtype: {latent_input.dtype}")
-                    logger.error(f"Error details - audio_features shape: {audio_features.shape}, dtype: {audio_features.dtype}")
-                    logger.error(f"Error details - timesteps: {timesteps}")
+                    logger.error(f"❌ UNet 추론 실패: {e}")
+                    logger.error(f"   latent_input shape: {latent_input.shape}, dtype: {latent_input.dtype}")
+                    logger.error(f"   audio_features shape: {audio_features.shape}, dtype: {audio_features.dtype}")
+                    logger.error(f"   timesteps: {timesteps}")
                     import traceback
-                    logger.error(f"Traceback: {traceback.format_exc()}")
-                    # 오류 발생 시 fallback 사용
-                    logger.warning("⚠️ UNet failed, using simple lipsync fallback")
-                    return self._apply_simple_lipsync(source_frame, audio_chunk)
+                    logger.error(f"   Traceback: {traceback.format_exc()}")
+                    logger.error("   해결방법: UNet 모델 파일이 올바른지 확인하세요 (models/musetalk/musetalkV15/unet.pth)")
+                    return source_frame
                 
                 # VAE 디코딩
                 logger.info("🔄 VAE decoding starting...")
@@ -563,12 +566,11 @@ class MuseTalkModel:
                 return source_frame
 
         except Exception as e:
-            logger.error(f"❌ MuseTalk inference error: {e}", exc_info=True)
+            logger.error(f"❌ MuseTalk 추론 오류: {e}", exc_info=True)
             import traceback
-            logger.error(f"Traceback: {traceback.format_exc()}")
-            # 오류 발생 시 fallback 사용
-            logger.warning("⚠️ MuseTalk failed, using simple lipsync fallback")
-            return self._apply_simple_lipsync(source_frame, audio_chunk)
+            logger.error(f"   Traceback: {traceback.format_exc()}")
+            logger.error("   해결방법: 로그를 확인하고 모델 파일이 올바른지 확인하세요.")
+            return source_frame
 
     def _extract_audio_features(
         self,

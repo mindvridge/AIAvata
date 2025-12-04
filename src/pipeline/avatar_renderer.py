@@ -565,7 +565,7 @@ class AvatarRenderer:
         self, frame: np.ndarray, audio_chunk: bytes, audio_sample_rate: int = 24000
     ) -> np.ndarray:
         """
-        립싱크 적용 (MuseTalk 또는 시뮬레이션)
+        립싱크 적용 (MuseTalk 사용)
 
         Args:
             frame: 원본 프레임
@@ -581,28 +581,32 @@ class AvatarRenderer:
 
         # fast_lipsync 설정 확인 - 빠른 시뮬레이션 사용
         if hasattr(self, '_settings') and self._settings and getattr(self._settings, 'fast_lipsync', False):
-            logger.debug("Using fast lip sync simulation (fast_lipsync=True)")
-            return await self._simulate_lipsync(frame, audio_chunk)
+            logger.warning("⚠️ fast_lipsync=True 설정됨 - MuseTalk 비활성화 상태")
+            return frame
 
         # MuseTalk 모델 상태 확인 및 상세 로깅
         if not self._musetalk_model:
             logger.error("❌ MuseTalk 모델이 초기화되지 않았습니다!")
-            return await self._simulate_lipsync(frame, audio_chunk)
+            logger.error("   해결방법: run.bat를 다시 실행하여 MuseTalk 모델을 다운로드하세요.")
+            return frame
 
         if not hasattr(self._musetalk_model, 'process_frame'):
             logger.error("❌ MuseTalk 모델에 process_frame 메서드가 없습니다!")
-            return await self._simulate_lipsync(frame, audio_chunk)
+            logger.error("   해결방법: MuseTalk 패키지를 재설치하세요.")
+            return frame
 
         # MuseTalk 내부 상태 확인
         if hasattr(self._musetalk_model, '_unet') and self._musetalk_model._unet is None:
-            logger.error("❌ MuseTalk UNet 모델이 로드되지 않았습니다! 모델 파일을 확인하세요.")
+            logger.error("❌ MuseTalk UNet 모델이 로드되지 않았습니다!")
             logger.error("   필요한 파일: models/musetalk/musetalkV15/unet.pth")
-            return await self._simulate_lipsync(frame, audio_chunk)
+            logger.error("   해결방법: run.bat를 다시 실행하거나 수동으로 다운로드하세요.")
+            return frame
 
         if hasattr(self._musetalk_model, '_vae') and self._musetalk_model._vae is None:
             logger.error("❌ MuseTalk VAE 모델이 로드되지 않았습니다!")
             logger.error("   필요한 파일: models/musetalk/sd-vae-ft-mse/")
-            return await self._simulate_lipsync(frame, audio_chunk)
+            logger.error("   해결방법: run.bat를 다시 실행하거나 수동으로 다운로드하세요.")
+            return frame
 
         try:
             # bytes를 numpy array로 변환
@@ -633,12 +637,11 @@ class AvatarRenderer:
                     logger.error("❌ MuseTalk이 None을 반환했습니다. 내부 처리 오류입니다.")
                 else:
                     logger.error(f"❌ MuseTalk 출력 shape 불일치: 예상={frame.shape}, 실제={lipsync_frame.shape}")
+                return frame
+
         except Exception as e:
             logger.error(f"❌ MuseTalk 립싱크 실패: {e}", exc_info=True)
-
-        # MuseTalk이 없거나 실패하면 간단한 시뮬레이션 사용
-        logger.warning("⚠️ MuseTalk 실패로 밝기 시뮬레이션 사용")
-        return await self._simulate_lipsync(frame, audio_chunk)
+            return frame
 
     def _resample_audio(
         self, audio: np.ndarray, orig_sr: int, target_sr: int

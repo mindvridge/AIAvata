@@ -169,27 +169,38 @@ class LivePortraitModel:
                             flag_force_cpu=self.device != "cuda",
                         )
 
-                        # 파이프라인은 많은 의존성이 있어 fallback 사용
-                        logger.info("LivePortrait config loaded, using fallback pipeline for stability")
+                        # 파이프라인은 많은 의존성이 있어 현재 미지원
+                        logger.error("❌ LivePortrait 파이프라인 로드 실패!")
+                        logger.error("   LivePortrait는 복잡한 의존성으로 인해 현재 실시간 애니메이션을 지원하지 않습니다.")
+                        logger.error("   Idle 애니메이션은 정적 이미지를 사용합니다.")
                         self._use_fallback = True
                     else:
-                        logger.warning("LivePortrait source files not found")
+                        logger.error("❌ LivePortrait 소스 파일을 찾을 수 없습니다!")
+                        logger.error(f"   필요한 경로: {config_path}, {pipeline_path}")
+                        logger.error("   해결방법: run.bat를 다시 실행하거나 external/LivePortrait 폴더를 확인하세요.")
                         self._use_fallback = True
 
                 except Exception as e:
-                    logger.warning(f"Failed to load LivePortrait modules directly: {e}")
+                    logger.error(f"❌ LivePortrait 모듈 로드 실패: {e}")
+                    logger.error("   이 오류는 LivePortrait의 상대 import 문제로 발생합니다.")
+                    logger.error("   Idle 애니메이션은 정적 이미지를 사용합니다.")
                     self._use_fallback = True
 
             except Exception as e:
-                logger.warning(f"Failed to initialize LivePortrait pipeline: {e}")
+                logger.error(f"❌ LivePortrait 파이프라인 초기화 실패: {e}")
+                logger.error("   해결방법: 모델 파일을 확인하세요 (models/live_portrait/)")
                 self._use_fallback = True
 
             self._initialized = True
-            logger.info("LivePortrait initialization complete")
+            if self._use_fallback:
+                logger.warning("⚠️ LivePortrait가 fallback 모드로 실행됩니다. Idle 애니메이션이 제한됩니다.")
+            else:
+                logger.info("✅ LivePortrait initialization complete")
             return True
 
         except Exception as e:
-            logger.error(f"Failed to initialize LivePortrait: {e}")
+            logger.error(f"❌ LivePortrait 초기화 실패: {e}")
+            logger.error("   해결방법: 로그를 확인하고 모델 파일이 올바른지 확인하세요.")
             self._use_fallback = True
             self._initialized = True
             return True
