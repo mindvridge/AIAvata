@@ -57,10 +57,13 @@ export function useWebSocket(options: UseWebSocketOptions): UseWebSocketReturn {
   const handleMessage = useCallback((event: MessageEvent) => {
     // Binary data is video frame
     if (event.data instanceof ArrayBuffer || event.data instanceof Blob) {
-      console.debug('Received video frame, size:', event.data instanceof ArrayBuffer ? event.data.byteLength : 'Blob');
+      // INFO 레벨로 프레임 수신 로깅 (디버깅용)
+      const frameSize = event.data instanceof ArrayBuffer ? event.data.byteLength : 'Blob';
+      console.log('📹 Video frame received:', frameSize, 'bytes');
+
       if (event.data instanceof Blob) {
         event.data.arrayBuffer().then((buffer) => {
-          console.debug('Converted Blob to ArrayBuffer, size:', buffer.byteLength);
+          console.log('📹 Converted Blob to ArrayBuffer:', buffer.byteLength, 'bytes');
           onVideoFrame?.(buffer);
         });
       } else {

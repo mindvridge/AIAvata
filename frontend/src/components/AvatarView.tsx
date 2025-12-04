@@ -133,13 +133,28 @@ export function AvatarView({
   }, [useCanvas, isConnected, frameData, width, height]);
 
   // frameData prop이 변경되면 canvas에 그리기
+  // 프레임 카운터 (디버깅용)
+  const frameCountRef = useRef(0);
+
   useEffect(() => {
-    if (!frameData || !canvasRef.current || !useCanvas) return;
+    if (!frameData || !canvasRef.current || !useCanvas) {
+      if (!frameData) console.log('🖼️ No frameData');
+      if (!canvasRef.current) console.log('🖼️ No canvas ref');
+      if (!useCanvas) console.log('🖼️ useCanvas is false');
+      return;
+    }
 
     const ctx = canvasRef.current.getContext('2d');
-    if (!ctx) return;
+    if (!ctx) {
+      console.error('🖼️ Failed to get 2D context');
+      return;
+    }
 
-    console.debug('Drawing frame to canvas, size:', frameData.byteLength);
+    frameCountRef.current++;
+    // 처음 3개 프레임과 이후 30개마다 로깅
+    if (frameCountRef.current <= 3 || frameCountRef.current % 30 === 0) {
+      console.log(`🖼️ Drawing frame #${frameCountRef.current} to canvas, size: ${frameData.byteLength} bytes`);
+    }
 
     const blob = new Blob([frameData], { type: 'image/jpeg' });
     const url = URL.createObjectURL(blob);
@@ -148,13 +163,15 @@ export function AvatarView({
     img.onload = () => {
       if (canvasRef.current && ctx) {
         ctx.drawImage(img, 0, 0, width, height);
-        console.debug('Frame drawn successfully');
+        if (frameCountRef.current <= 3) {
+          console.log(`🖼️ Frame #${frameCountRef.current} drawn successfully`);
+        }
       }
       URL.revokeObjectURL(url);
     };
 
     img.onerror = (error) => {
-      console.error('Failed to load frame image:', error);
+      console.error('🖼️ Failed to load frame image:', error);
       URL.revokeObjectURL(url);
     };
 
