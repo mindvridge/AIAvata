@@ -1,4 +1,5 @@
 @echo off
+setlocal enabledelayedexpansion
 chcp 65001 >nul
 title AI Avatar Service
 
@@ -721,16 +722,34 @@ REM Optional: Try to install insightface if missing (use pre-built wheel for Win
 python -c "import insightface" 2>nul
 if errorlevel 1 (
     echo       insightface 설치 중... (사전 빌드된 휠 사용)
-    REM Download pre-built wheel for Python 3.10 Windows
+
+    REM Detect Python version (3.9, 3.10, 3.11, 3.12, 3.13)
+    for /f "tokens=2 delims=." %%a in ('python -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')"') do set PY_MINOR=%%a
+    set PY_VER=cp3!PY_MINOR!
+
+    echo       Python 버전 감지: 3.!PY_MINOR! (!PY_VER!)
+
     if not exist "tools" mkdir tools
-    curl -L -o "tools\insightface.whl" "https://github.com/Gourieff/Assets/raw/main/Insightface/insightface-0.7.3-cp310-cp310-win_amd64.whl" --progress-bar 2>nul
-    if exist "tools\insightface.whl" (
-        pip install "tools\insightface.whl" -q
-        if not errorlevel 1 (
-            echo       insightface 설치 완료!
-            del "tools\insightface.whl" 2>nul
+    set "WHEEL_URL=https://github.com/Gourieff/Assets/raw/main/Insightface/insightface-0.7.3-!PY_VER!-!PY_VER!-win_amd64.whl"
+    set "WHEEL_FILE=tools\insightface-!PY_VER!.whl"
+
+    curl -L -o "!WHEEL_FILE!" "!WHEEL_URL!" --progress-bar 2>nul
+
+    REM Check if downloaded file is valid (at least 1MB)
+    if exist "!WHEEL_FILE!" (
+        for %%A in ("!WHEEL_FILE!") do set WHEEL_SIZE=%%~zA
+        if !WHEEL_SIZE! GTR 1000000 (
+            pip install "!WHEEL_FILE!" -q
+            if not errorlevel 1 (
+                echo       insightface 설치 완료!
+                del "!WHEEL_FILE!" 2>nul
+            ) else (
+                echo       [경고] insightface 휠 설치 실패. pip로 재시도...
+                pip install insightface --prefer-binary -q 2>nul
+            )
         ) else (
-            echo       [경고] insightface 휠 설치 실패. pip로 재시도...
+            echo       [경고] insightface 휠 다운로드 불완전. pip로 재시도...
+            del "!WHEEL_FILE!" 2>nul
             pip install insightface --prefer-binary -q 2>nul
         )
     ) else (
@@ -752,15 +771,33 @@ pip install pykalman --no-cache-dir -q
 
 REM insightface: Download pre-built wheel for Windows (avoid C++ compile errors)
 echo       insightface 설치 중... (사전 빌드된 휠 사용)
+
+REM Detect Python version (3.9, 3.10, 3.11, 3.12, 3.13)
+for /f "tokens=2 delims=." %%a in ('python -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')"') do set PY_MINOR=%%a
+set PY_VER=cp3!PY_MINOR!
+echo       Python 버전 감지: 3.!PY_MINOR! (!PY_VER!)
+
 if not exist "tools" mkdir tools
-curl -L -o "tools\insightface.whl" "https://github.com/Gourieff/Assets/raw/main/Insightface/insightface-0.7.3-cp310-cp310-win_amd64.whl" --progress-bar 2>nul
-if exist "tools\insightface.whl" (
-    pip install "tools\insightface.whl" -q
-    if not errorlevel 1 (
-        echo       insightface 설치 완료!
-        del "tools\insightface.whl" 2>nul
+set "WHEEL_URL=https://github.com/Gourieff/Assets/raw/main/Insightface/insightface-0.7.3-!PY_VER!-!PY_VER!-win_amd64.whl"
+set "WHEEL_FILE=tools\insightface-!PY_VER!.whl"
+
+curl -L -o "!WHEEL_FILE!" "!WHEEL_URL!" --progress-bar 2>nul
+
+REM Check if downloaded file is valid (at least 1MB)
+if exist "!WHEEL_FILE!" (
+    for %%A in ("!WHEEL_FILE!") do set WHEEL_SIZE=%%~zA
+    if !WHEEL_SIZE! GTR 1000000 (
+        pip install "!WHEEL_FILE!" -q
+        if not errorlevel 1 (
+            echo       insightface 설치 완료!
+            del "!WHEEL_FILE!" 2>nul
+        ) else (
+            echo       [경고] insightface 휠 설치 실패. pip로 재시도...
+            pip install insightface --prefer-binary -q 2>nul
+        )
     ) else (
-        echo       [경고] Python 3.10 휠 호환 문제. pip로 재시도...
+        echo       [경고] insightface 휠 다운로드 불완전. pip로 재시도...
+        del "!WHEEL_FILE!" 2>nul
         pip install insightface --prefer-binary -q 2>nul
     )
 ) else (
