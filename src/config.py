@@ -84,7 +84,7 @@ class Settings(BaseSettings):
 
     # Lip Sync Settings
     fast_lipsync: bool = Field(
-        default=True,
+        default=False,
         description="Use fast lip sync simulation instead of MuseTalk (faster but lower quality)"
     )
 

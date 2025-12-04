@@ -648,69 +648,14 @@ class AvatarRenderer:
         self, frame: np.ndarray, audio_chunk: bytes
     ) -> np.ndarray:
         """
-        MediaPipe 기반 립싱크 시뮬레이션
-        실제 입 위치를 감지하여 오디오 레벨에 따라 입 모양 변경
+        빠른 립싱크 시뮬레이션 (fast_lipsync=True 시 사용)
+
+        참고: 이 모드는 실제 입 애니메이션 없이 원본 프레임을 반환합니다.
+        자연스러운 립싱크를 원하면 fast_lipsync=False로 설정하여 MuseTalk을 사용하세요.
         """
-        try:
-            # 오디오 레벨 계산
-            audio_array = np.frombuffer(audio_chunk, dtype=np.int16).astype(np.float32)
-            if len(audio_array) == 0:
-                logger.debug("Empty audio array, skipping lip sync")
-                return frame
-
-            audio_level = np.abs(audio_array).mean() / 32767.0  # 0.0 ~ 1.0
-
-            # 입 열림 정도 (0 = 닫힘, 1 = 최대 열림)
-            mouth_openness = min(audio_level * 5.0, 1.0)  # 레벨을 5배 증폭 (더 민감하게)
-
-            logger.debug(f"Lip sync: audio_level={audio_level:.4f}, mouth_openness={mouth_openness:.4f}")
-
-            # 너무 작은 레벨이면 처리하지 않음 (임계값 낮춤)
-            if mouth_openness < 0.02:
-                return frame
-
-            # 프레임 복사
-            result_frame = frame.copy()
-            h, w = frame.shape[:2]
-
-            # MediaPipe로 실제 입 위치 감지
-            mouth_center, mouth_width, mouth_height = self._detect_mouth_region(frame)
-
-            if mouth_center is not None:
-                # 실제 감지된 입 위치 사용
-                mouth_x, mouth_y = mouth_center
-                mouth_w = int(mouth_width * 0.8)  # 입 너비
-                mouth_h = int(mouth_height * mouth_openness * 2.0)  # 열림 정도에 따른 높이 (증폭)
-                logger.debug(f"MediaPipe mouth detected: center=({mouth_x}, {mouth_y}), w={mouth_w}, h={mouth_h}")
-            else:
-                # Fallback: 기본 위치 사용 (더 큰 입 크기)
-                mouth_y = int(h * 0.68)
-                mouth_x = int(w * 0.5)
-                mouth_w = int(w * 0.15)  # 더 큰 너비
-                mouth_h = int(h * 0.08 * mouth_openness)  # 더 큰 높이
-                logger.debug(f"Using fallback mouth position: center=({mouth_x}, {mouth_y}), w={mouth_w}, h={mouth_h}")
-
-            # 입 열림 시각화 (자연스러운 어두운 타원)
-            if mouth_h > 1:
-                # 입 내부 (어두운 색)
-                overlay = result_frame.copy()
-                cv2.ellipse(
-                    overlay,
-                    (int(mouth_x), int(mouth_y)),
-                    (mouth_w // 2, max(1, mouth_h)),
-                    0, 0, 360,
-                    (20, 20, 30),  # 어두운 색 (입 안)
-                    -1
-                )
-                # 블렌딩으로 자연스럽게
-                alpha = min(0.7, mouth_openness + 0.3)
-                result_frame = cv2.addWeighted(overlay, alpha, result_frame, 1 - alpha, 0)
-
-            return result_frame
-
-        except Exception as e:
-            logger.error(f"Lip sync simulation error: {e}")
-            return frame
+        # fast_lipsync 모드에서는 그냥 원본 프레임 반환 (인위적인 도형 그리지 않음)
+        # MuseTalk을 사용하지 않으면 립싱크 없이 원본 이미지 표시
+        return frame
 
     def _detect_mouth_region(
         self, frame: np.ndarray
