@@ -56,7 +56,7 @@ function App() {
 
   // Handle video frames from WebSocket - AvatarView에 전달
   const handleVideoFrame = useCallback((data: ArrayBuffer) => {
-    console.debug('App: Received video frame, size:', data.byteLength);
+    console.log('📥 App: Received video frame, size:', data.byteLength);
     setFrameData(data);
   }, []);
 

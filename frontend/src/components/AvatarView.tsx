@@ -161,11 +161,22 @@ export function AvatarView({
     const img = new Image();
 
     img.onload = () => {
-      if (canvasRef.current && ctx) {
-        ctx.drawImage(img, 0, 0, width, height);
-        if (frameCountRef.current <= 3) {
-          console.log(`🖼️ Frame #${frameCountRef.current} drawn successfully`);
-        }
+      // Get fresh context to ensure it's still valid
+      const canvas = canvasRef.current;
+      if (!canvas) {
+        console.warn('🖼️ Canvas ref lost before frame could be drawn');
+        URL.revokeObjectURL(url);
+        return;
+      }
+      const freshCtx = canvas.getContext('2d');
+      if (!freshCtx) {
+        console.warn('🖼️ Could not get canvas context in onload');
+        URL.revokeObjectURL(url);
+        return;
+      }
+      freshCtx.drawImage(img, 0, 0, width, height);
+      if (frameCountRef.current <= 3) {
+        console.log(`🖼️ Frame #${frameCountRef.current} drawn successfully (${img.naturalWidth}x${img.naturalHeight})`);
       }
       URL.revokeObjectURL(url);
     };
