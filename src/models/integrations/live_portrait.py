@@ -70,6 +70,7 @@ class LivePortraitModel:
 
         # LivePortrait 파이프라인
         self._pipeline = None
+        self._wrapper = None
         self._cropper = None
 
         # 소스 이미지 캐시
@@ -205,13 +206,25 @@ class LivePortraitModel:
                     logger.info("✅ LivePortrait config 모듈 임포트 성공!")
 
                     # 모델 파일 절대 경로 설정 (LivePortrait의 상대 경로 문제 해결)
-                    lp_base_models_abs = self.model_dir.resolve() / "liveportrait" / "base_models"
-                    lp_retarget_abs = self.model_dir.resolve() / "liveportrait" / "retargeting_models"
+                    model_dir_abs = self.model_dir.resolve()
+                    lp_base_models_abs = model_dir_abs / "liveportrait" / "base_models"
+                    lp_retarget_abs = model_dir_abs / "liveportrait" / "retargeting_models"
+                    lp_config_abs = lp_src_path / "config"
 
-                    # 설정 초기화 - 절대 경로로 체크포인트 지정
+                    # models.yaml 경로 (LivePortrait src/config 디렉토리에 있음)
+                    models_yaml_path = lp_config_abs / "models.yaml"
+                    if not models_yaml_path.exists():
+                        logger.error(f"❌ models.yaml not found: {models_yaml_path}")
+                        self._use_fallback = True
+                        self._initialized = True
+                        return True
+
+                    # 설정 초기화 - 절대 경로로 모든 경로 지정
                     inference_cfg = InferenceConfig(
                         device_id=0 if self.device == "cuda" else -1,
                         flag_force_cpu=self.device != "cuda",
+                        # models.yaml 절대 경로 지정
+                        models_config=str(models_yaml_path),
                         # 체크포인트 절대 경로 지정
                         checkpoint_F=str(lp_base_models_abs / "appearance_feature_extractor.pth"),
                         checkpoint_M=str(lp_base_models_abs / "motion_extractor.pth"),
@@ -219,30 +232,87 @@ class LivePortraitModel:
                         checkpoint_W=str(lp_base_models_abs / "warping_module.pth"),
                         checkpoint_S=str(lp_retarget_abs / "stitching_retargeting_module.pth"),
                     )
+                    logger.info(f"   models.yaml 경로: {models_yaml_path}")
                     logger.info(f"   체크포인트 경로: {lp_base_models_abs}")
-                    crop_cfg = CropConfig()
 
-                    # LivePortraitPipeline 로드 시도 (복잡한 의존성이 있어 실패할 수 있음)
+                    # Cropper 설정 - InsightFace 및 landmark 절대 경로 지정
+                    insightface_root = model_dir_abs / "insightface"
+                    landmark_path = model_dir_abs / "liveportrait" / "landmark.onnx"
+
+                    # InsightFace 및 landmark 파일 존재 확인
+                    insightface_models_dir = insightface_root / "models" / "buffalo_l"
+                    required_insightface_files = [
+                        insightface_models_dir / "det_10g.onnx",
+                        insightface_models_dir / "2d106det.onnx",
+                    ]
+                    missing_files = []
+
+                    if not landmark_path.exists():
+                        missing_files.append(f"landmark.onnx: {landmark_path}")
+
+                    for f in required_insightface_files:
+                        if not f.exists():
+                            missing_files.append(f"InsightFace: {f}")
+
+                    if missing_files:
+                        logger.warning("⚠️ 일부 모델 파일이 없습니다 (Cropper 비활성화):")
+                        for f in missing_files:
+                            logger.warning(f"   - {f}")
+                        logger.info("   Cropper 없이 기본 파이프라인만 초기화합니다.")
+                        # Cropper 없이 진행 (소스 이미지 크롭 불가)
+                        crop_cfg = None
+                    else:
+                        crop_cfg = CropConfig(
+                            insightface_root=str(insightface_root),
+                            landmark_ckpt_path=str(landmark_path),
+                            device_id=0 if self.device == "cuda" else -1,
+                            flag_force_cpu=self.device != "cuda",
+                        )
+                        logger.info(f"   InsightFace 경로: {insightface_root}")
+                        logger.info(f"   Landmark 경로: {landmark_path}")
+
+                    # LivePortrait 모듈 로드 시도
                     try:
                         # utils 모듈들 먼저 등록
                         load_module_from_path("lp_src.utils", lp_src_path / "utils" / "__init__.py")
                         load_module_from_path("lp_src.modules", lp_src_path / "modules" / "__init__.py")
 
-                        pipeline_module = load_module_from_path(
-                            "lp_src.live_portrait_pipeline",
-                            lp_src_path / "live_portrait_pipeline.py"
+                        # LivePortraitWrapper 직접 로드 (더 간단한 방식)
+                        wrapper_module = load_module_from_path(
+                            "lp_src.live_portrait_wrapper",
+                            lp_src_path / "live_portrait_wrapper.py"
                         )
-                        LivePortraitPipeline = pipeline_module.LivePortraitPipeline
+                        LivePortraitWrapper = wrapper_module.LivePortraitWrapper
 
-                        # 파이프라인 초기화
-                        self._pipeline = LivePortraitPipeline(
-                            inference_cfg=inference_cfg,
-                            crop_cfg=crop_cfg
-                        )
-                        logger.info("✅ LivePortrait 파이프라인 초기화 성공!")
+                        # Wrapper 초기화 (Cropper 없이도 동작)
+                        self._wrapper = LivePortraitWrapper(inference_cfg=inference_cfg)
+                        logger.info("✅ LivePortraitWrapper 초기화 성공!")
+
+                        # Cropper가 있으면 전체 파이프라인도 시도
+                        if crop_cfg is not None:
+                            try:
+                                pipeline_module = load_module_from_path(
+                                    "lp_src.live_portrait_pipeline",
+                                    lp_src_path / "live_portrait_pipeline.py"
+                                )
+                                LivePortraitPipeline = pipeline_module.LivePortraitPipeline
+
+                                self._pipeline = LivePortraitPipeline(
+                                    inference_cfg=inference_cfg,
+                                    crop_cfg=crop_cfg
+                                )
+                                logger.info("✅ LivePortrait 파이프라인 초기화 성공!")
+                            except Exception as pipe_err:
+                                logger.warning(f"⚠️ 파이프라인 초기화 실패, Wrapper만 사용: {pipe_err}")
+                                self._pipeline = None
+                        else:
+                            self._pipeline = None
+                            logger.info("   Cropper 없음 - Wrapper만 사용합니다.")
 
                     except Exception as pipeline_error:
-                        logger.warning(f"⚠️ LivePortrait 파이프라인 로드 실패: {pipeline_error}")
+                        logger.warning(f"⚠️ LivePortrait 모듈 로드 실패: {pipeline_error}")
+                        import traceback
+                        logger.warning(traceback.format_exc())
                         logger.warning("   Idle 애니메이션은 간단한 변환을 사용합니다.")
                         self._use_fallback = True
 
@@ -300,20 +370,40 @@ class LivePortraitModel:
 
         features = {"source_image": source_image}
 
-        if not self._use_fallback and self._pipeline is not None:
+        # Wrapper나 Pipeline이 있으면 사용
+        if not self._use_fallback and (self._wrapper is not None or self._pipeline is not None):
             try:
                 # LivePortrait 소스 특징 추출
                 # RGB로 변환
                 source_rgb = cv2.cvtColor(source_image, cv2.COLOR_BGR2RGB)
 
-                # 파이프라인으로 특징 추출
-                source_info = self._pipeline.prepare_source(source_rgb)
-                features["pipeline_source"] = source_info
+                # Wrapper 직접 사용 (더 안정적)
+                if self._wrapper is not None:
+                    # 256x256으로 리사이즈
+                    source_256 = cv2.resize(source_rgb, (256, 256))
+                    I_s = self._wrapper.prepare_source(source_256)
+                    x_s_info = self._wrapper.get_kp_info(I_s)
+                    f_s = self._wrapper.extract_feature_3d(I_s)
+                    x_s = self._wrapper.transform_keypoint(x_s_info)
 
-                logger.debug(f"Extracted LivePortrait features for {source_id}")
+                    features["wrapper_source"] = {
+                        "I_s": I_s,
+                        "x_s_info": x_s_info,
+                        "f_s": f_s,
+                        "x_s": x_s,
+                        "source_256": source_256,
+                    }
+                    logger.debug(f"Extracted LivePortrait wrapper features for {source_id}")
+                elif self._pipeline is not None:
+                    # 파이프라인으로 특징 추출 (fallback)
+                    source_info = self._pipeline.prepare_source(source_rgb)
+                    features["pipeline_source"] = source_info
+                    logger.debug(f"Extracted LivePortrait pipeline features for {source_id}")
 
             except Exception as e:
                 logger.warning(f"Feature extraction failed: {e}")
+                import traceback
+                logger.debug(traceback.format_exc())
 
         # 캐시 저장
         self._source_cache[source_id] = features
@@ -350,14 +440,35 @@ class LivePortraitModel:
         # 감정별 모션 프로필
         motion_profile = self._get_emotion_motion_profile(emotion)
 
-        if not self._use_fallback and self._pipeline is not None and "pipeline_source" in features:
-            # LivePortrait 파이프라인으로 프레임 생성
+        # Wrapper로 프레임 생성 (우선)
+        if not self._use_fallback and self._wrapper is not None and "wrapper_source" in features:
             try:
                 for frame_idx in range(total_frames):
                     t = frame_idx / fps
                     motion_params = self._calculate_idle_motion(t, frame_idx / total_frames, motion_profile)
 
-                    # 파이프라인으로 프레임 생성
+                    # Wrapper로 프레임 생성
+                    frame = await self._generate_frame_with_wrapper(
+                        features["wrapper_source"],
+                        motion_params
+                    )
+                    frames.append(frame)
+
+                return frames
+
+            except Exception as e:
+                logger.warning(f"Wrapper frame generation failed: {e}")
+                import traceback
+                logger.debug(traceback.format_exc())
+                # Fallback으로 전환
+
+        # Pipeline으로 프레임 생성 (대안)
+        elif not self._use_fallback and self._pipeline is not None and "pipeline_source" in features:
+            try:
+                for frame_idx in range(total_frames):
+                    t = frame_idx / fps
+                    motion_params = self._calculate_idle_motion(t, frame_idx / total_frames, motion_profile)
+
                     frame = await self._generate_frame_with_pipeline(
                         features["pipeline_source"],
                         motion_params
@@ -405,6 +516,61 @@ class LivePortraitModel:
 
         # 실패 시 원본 반환
         return source_info.get("source_image", np.zeros((512, 512, 3), dtype=np.uint8))
+
+    async def _generate_frame_with_wrapper(
+        self,
+        wrapper_source: Dict[str, Any],
+        motion_params: Dict[str, float],
+    ) -> np.ndarray:
+        """LivePortrait Wrapper로 프레임 생성"""
+        try:
+            import torch
+
+            f_s = wrapper_source["f_s"]
+            x_s = wrapper_source["x_s"]
+            x_s_info = wrapper_source["x_s_info"]
+            source_256 = wrapper_source["source_256"]
+
+            # 모션 파라미터에서 변형 계산
+            head_pitch = motion_params.get("head_pitch", 0) * 10  # 라디안을 각도로
+            head_yaw = motion_params.get("head_yaw", 0) * 10
+            head_roll = motion_params.get("head_roll", 0) * 5
+
+            # 새로운 키포인트 계산 (간단한 변형)
+            x_d = x_s.clone()
+
+            # 머리 회전 적용 (간단한 선형 보간)
+            # 표정 변화 없이 위치만 약간 변경
+            scale = x_s_info["scale"]
+            if isinstance(scale, torch.Tensor):
+                scale_val = scale.item() if scale.numel() == 1 else scale[0].item()
+            else:
+                scale_val = float(scale)
+
+            # 키포인트에 미세한 오프셋 적용
+            offset = torch.zeros_like(x_d)
+            offset[:, :, 0] = head_yaw * 0.01 * scale_val
+            offset[:, :, 1] = head_pitch * 0.01 * scale_val
+            x_d = x_d + offset
+
+            # warp_decode로 새 프레임 생성
+            ret_dct = self._wrapper.warp_decode(f_s, x_s, x_d)
+
+            # 결과 파싱
+            out = self._wrapper.parse_output(ret_dct['out'])[0]  # HxWx3, uint8
+
+            # BGR로 변환
+            output_bgr = cv2.cvtColor(out, cv2.COLOR_RGB2BGR)
+            return output_bgr
+
+        except Exception as e:
+            logger.debug(f"Wrapper execution error: {e}")
+            import traceback
+            logger.debug(traceback.format_exc())
+
+        # 실패 시 원본 반환
+        source_256 = wrapper_source.get("source_256", np.zeros((256, 256, 3), dtype=np.uint8))
+        return cv2.cvtColor(source_256, cv2.COLOR_RGB2BGR)
 
     def _create_driving_info(self, motion_params: Dict[str, float]) -> Dict[str, Any]:
         """모션 파라미터에서 드라이빙 정보 생성"""
@@ -604,6 +770,7 @@ class LivePortraitModel:
     async def cleanup(self) -> None:
         """리소스 정리"""
         self._pipeline = None
+        self._wrapper = None
         self._cropper = None
         self._source_cache.clear()
         self._initialized = False
