@@ -368,9 +368,23 @@ class MuseTalkModel:
                 logger.error("   해결방법: run.bat를 다시 실행하거나 수동으로 다운로드하세요.")
                 return source_frame
             
-            # 얼굴 영역 추출 (전체 프레임 사용, 256x256으로 리사이즈)
+            # 얼굴 영역 추출 (MediaPipe로 얼굴 감지 후 크롭)
             import cv2
-            face_crop = cv2.resize(source_frame, (256, 256))
+
+            # MediaPipe로 얼굴 위치 찾기
+            face_bbox = self._detect_face_bbox(source_frame)
+
+            if face_bbox is not None:
+                x1, y1, x2, y2 = face_bbox
+                # 얼굴 영역만 크롭
+                face_region = source_frame[y1:y2, x1:x2]
+                face_crop = cv2.resize(face_region, (256, 256))
+                logger.debug(f"Face detected: bbox=({x1}, {y1}, {x2}, {y2})")
+            else:
+                # 얼굴 감지 실패 시 전체 프레임 사용
+                face_crop = cv2.resize(source_frame, (256, 256))
+                face_bbox = None
+                logger.debug("Face not detected, using full frame")
             
             # VAE로 얼굴 이미지를 latent로 인코딩
             # get_latents_for_unet은 이미지 경로나 numpy array를 받을 수 있음
@@ -620,12 +634,18 @@ class MuseTalkModel:
                 # Face Parser 실패 시 간단한 타원형 마스크 사용
                 if mask is None:
                     mask = np.zeros((256, 256), dtype=np.float32)
-                    # 입 위치 추정 (얼굴 중앙 하단)
-                    center_x, center_y = 128, 180  # 대략적인 입 중심
-                    axes = (50, 30)  # 타원 크기 (가로, 세로)
+                    # 입 위치 추정 (얼굴 크롭 기준 - 중앙 약간 아래)
+                    # 256x256 얼굴 크롭에서:
+                    # - 이마: 0-40 (0-15%)
+                    # - 눈: 60-100 (23-39%)
+                    # - 코: 100-145 (39-57%)
+                    # - 입: 145-190 (57-74%)
+                    # - 턱: 190-220 (74-86%)
+                    center_x, center_y = 128, 165  # 입 중심 (180 -> 165로 조정)
+                    axes = (45, 25)  # 타원 크기를 작게 조정 (50,30 -> 45,25)
                     cv2.ellipse(mask, (center_x, center_y), axes, 0, 0, 360, 1.0, -1)
                     # 가우시안 블러로 부드럽게
-                    mask = cv2.GaussianBlur(mask, (31, 31), 0)
+                    mask = cv2.GaussianBlur(mask, (21, 21), 0)
 
                 # 3채널로 확장
                 mask_3ch = np.stack([mask, mask, mask], axis=-1)
@@ -635,15 +655,30 @@ class MuseTalkModel:
                                result_256.astype(np.float32) * mask_3ch)
                 blended_256 = np.clip(blended_256, 0, 255).astype(np.uint8)
 
-                # 원본 크기로 리사이즈
-                result_frame = cv2.resize(blended_256, (w, h), interpolation=cv2.INTER_LINEAR)
+                # 얼굴 bbox가 있으면 해당 영역에만 결과 적용
+                if face_bbox is not None:
+                    x1, y1, x2, y2 = face_bbox
+                    face_w, face_h = x2 - x1, y2 - y1
 
-                if result_frame is not None and result_frame.shape[:2] == (h, w):
-                    logger.info(f"✅ MuseTalk lip sync SUCCESS: output shape={result_frame.shape}")
+                    # 결과를 원본 얼굴 크기로 리사이즈
+                    result_face = cv2.resize(blended_256, (face_w, face_h), interpolation=cv2.INTER_LINEAR)
+
+                    # 원본 프레임에 결과 페이스트
+                    result_frame = source_frame.copy()
+                    result_frame[y1:y2, x1:x2] = result_face
+
+                    logger.info(f"✅ MuseTalk lip sync SUCCESS: face bbox=({x1},{y1},{x2},{y2})")
                     return result_frame
                 else:
-                    logger.warning(f"Resize result invalid: {result_frame.shape if result_frame is not None else None}, returning source frame")
-                    return source_frame
+                    # 얼굴 감지 실패 시 전체 프레임 리사이즈
+                    result_frame = cv2.resize(blended_256, (w, h), interpolation=cv2.INTER_LINEAR)
+
+                    if result_frame is not None and result_frame.shape[:2] == (h, w):
+                        logger.info(f"✅ MuseTalk lip sync SUCCESS: output shape={result_frame.shape}")
+                        return result_frame
+                    else:
+                        logger.warning(f"Resize result invalid: {result_frame.shape if result_frame is not None else None}, returning source frame")
+                        return source_frame
             except Exception as e:
                 logger.error(f"OpenCV resize/blend failed: {e}, output_np shape: {output_np.shape}, target size: ({w}, {h}), returning source frame")
                 return source_frame
@@ -803,6 +838,72 @@ class MuseTalkModel:
                 features.append([energy] * 13)
 
             return np.array(features, dtype=np.float32)
+
+    def _detect_face_bbox(
+        self,
+        frame: np.ndarray,
+    ) -> Optional[Tuple[int, int, int, int]]:
+        """
+        MediaPipe로 얼굴 영역 감지
+
+        Args:
+            frame: 입력 프레임 (BGR)
+
+        Returns:
+            (x1, y1, x2, y2) 얼굴 bounding box 또는 None
+        """
+        import cv2
+
+        try:
+            import mediapipe as mp
+
+            mp_face_detection = mp.solutions.face_detection
+
+            with mp_face_detection.FaceDetection(
+                model_selection=1,  # 0: 2m 이내, 1: 5m 이내
+                min_detection_confidence=0.5
+            ) as face_detection:
+                h, w = frame.shape[:2]
+                rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                results = face_detection.process(rgb_frame)
+
+                if not results.detections:
+                    return None
+
+                # 가장 큰 얼굴 선택 (여러 얼굴이 있을 경우)
+                detection = results.detections[0]
+                bbox = detection.location_data.relative_bounding_box
+
+                # 상대 좌표를 절대 좌표로 변환
+                x1 = int(bbox.xmin * w)
+                y1 = int(bbox.ymin * h)
+                face_w = int(bbox.width * w)
+                face_h = int(bbox.height * h)
+
+                # 패딩 추가 (얼굴 주변 여유 공간)
+                pad = int(0.3 * max(face_w, face_h))
+                x1 = max(0, x1 - pad)
+                y1 = max(0, y1 - pad)
+                x2 = min(w, x1 + face_w + 2 * pad)
+                y2 = min(h, y1 + face_h + 2 * pad)
+
+                # 정사각형에 가깝게 조정
+                size = max(x2 - x1, y2 - y1)
+                center_x = (x1 + x2) // 2
+                center_y = (y1 + y2) // 2
+                x1 = max(0, center_x - size // 2)
+                y1 = max(0, center_y - size // 2)
+                x2 = min(w, x1 + size)
+                y2 = min(h, y1 + size)
+
+                return (x1, y1, x2, y2)
+
+        except ImportError:
+            logger.debug("MediaPipe not installed, face detection unavailable")
+            return None
+        except Exception as e:
+            logger.debug(f"Face detection failed: {e}")
+            return None
 
     def _preprocess_face(
         self,
