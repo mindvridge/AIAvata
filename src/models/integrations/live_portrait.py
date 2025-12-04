@@ -539,17 +539,28 @@ class LivePortraitModel:
             blink = motion_params.get("blink", 0)
             mouth_open = motion_params.get("mouth_open", 0)
 
+            # 디바이스 및 dtype 확인 (GPU 텐서와 CPU 텐서 혼합 방지)
+            device = x_s_info["pitch"].device if "pitch" in x_s_info else torch.device("cpu")
+            dtype = x_s_info["pitch"].dtype if "pitch" in x_s_info else torch.float32
+
             # x_s_info를 복사하여 수정 (원본 보존)
-            x_d_info = copy.deepcopy(x_s_info)
+            # deepcopy는 GPU 텐서에서 문제가 있을 수 있으므로 수동 복사
+            x_d_info = {}
+            for key, value in x_s_info.items():
+                if isinstance(value, torch.Tensor):
+                    x_d_info[key] = value.clone()
+                else:
+                    x_d_info[key] = copy.deepcopy(value)
 
             # 1. 회전 적용 (pitch, yaw, roll) - 원본 값에 변화량 추가
             # LivePortrait의 회전 값은 라디안 단위
+            # 중요: 텐서를 같은 device와 dtype으로 생성
             if "pitch" in x_d_info:
-                x_d_info["pitch"] = x_s_info["pitch"] + torch.tensor([[head_pitch * 0.15]])
+                x_d_info["pitch"] = x_s_info["pitch"] + torch.tensor([[head_pitch * 0.15]], device=device, dtype=dtype)
             if "yaw" in x_d_info:
-                x_d_info["yaw"] = x_s_info["yaw"] + torch.tensor([[head_yaw * 0.15]])
+                x_d_info["yaw"] = x_s_info["yaw"] + torch.tensor([[head_yaw * 0.15]], device=device, dtype=dtype)
             if "roll" in x_d_info:
-                x_d_info["roll"] = x_s_info["roll"] + torch.tensor([[head_roll * 0.08]])
+                x_d_info["roll"] = x_s_info["roll"] + torch.tensor([[head_roll * 0.08]], device=device, dtype=dtype)
 
             # 2. 표정 적용 (눈 깜빡임, 입 움직임)
             if "exp" in x_d_info and x_d_info["exp"] is not None:
@@ -577,9 +588,9 @@ class LivePortraitModel:
             return output_bgr
 
         except Exception as e:
-            logger.debug(f"Wrapper execution error: {e}")
+            logger.warning(f"Wrapper execution error: {e}")
             import traceback
-            logger.debug(traceback.format_exc())
+            logger.warning(traceback.format_exc())
 
         # 실패 시 원본 반환
         source_256 = wrapper_source.get("source_256", np.zeros((256, 256, 3), dtype=np.uint8))
