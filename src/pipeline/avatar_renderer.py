@@ -300,29 +300,34 @@ class AvatarRenderer:
         # 각 감정별로 다른 애니메이션 효과 적용
         for emotion in [Emotion.NEUTRAL, Emotion.HAPPY, Emotion.SAD, Emotion.LISTENING]:
             frames = []
-            
+
             for i in range(num_frames):
                 # 프레임 복사
                 frame = base_frame.copy().astype(np.float32)
-                
-                # 1. 호흡 효과 (밝기 미세 변화) - 사인 곡선
-                breath_factor = 1.0 + 0.02 * math.sin(2 * math.pi * i / num_frames)
+
+                # 1. 호흡 효과 (밝기 변화) - 사인 곡선 (눈에 보이도록 증가)
+                breath_factor = 1.0 + 0.05 * math.sin(2 * math.pi * i / num_frames)
                 frame = frame * breath_factor
-                
-                # 2. 미세한 움직임 효과 (아주 작은 이동)
-                shift_x = int(1.5 * math.sin(2 * math.pi * i / num_frames))
-                shift_y = int(1.0 * math.sin(4 * math.pi * i / num_frames))
-                
-                # 이동 행렬 생성
-                M = np.float32([[1, 0, shift_x], [0, 1, shift_y]])
+
+                # 2. 미세한 움직임 효과 (자연스러운 흔들림)
+                shift_x = int(3 * math.sin(2 * math.pi * i / num_frames))
+                shift_y = int(2 * math.sin(4 * math.pi * i / num_frames))
+
+                # 3. 미세한 회전 효과 추가 (호흡처럼 보이게)
+                rotation_angle = 0.5 * math.sin(2 * math.pi * i / num_frames)
+                center = (self.output_width // 2, self.output_height // 2)
+                rotation_matrix = cv2.getRotationMatrix2D(center, rotation_angle, 1.0)
+                rotation_matrix[0, 2] += shift_x
+                rotation_matrix[1, 2] += shift_y
+
                 frame = cv2.warpAffine(
-                    frame.astype(np.uint8), 
-                    M, 
+                    frame.astype(np.uint8),
+                    rotation_matrix,
                     (self.output_width, self.output_height),
                     borderMode=cv2.BORDER_REFLECT
                 ).astype(np.float32)
-                
-                # 3. 감정별 추가 효과
+
+                # 4. 감정별 추가 효과
                 if emotion == Emotion.HAPPY:
                     # 밝게
                     frame = frame * 1.05
@@ -332,11 +337,11 @@ class AvatarRenderer:
                 elif emotion == Emotion.LISTENING:
                     # 약간 파란 톤 추가
                     frame[:, :, 0] = frame[:, :, 0] * 1.02  # Blue channel
-                
+
                 # 클리핑하여 0-255 범위로 유지
                 frame = np.clip(frame, 0, 255).astype(np.uint8)
                 frames.append(frame)
-            
+
             self._idle_loops[emotion] = frames
             logger.info(f"Created {num_frames} animated frames for emotion: {emotion.value}")
 
@@ -668,7 +673,7 @@ class AvatarRenderer:
         """
         립싱크 시뮬레이션 (MuseTalk 대체)
 
-        오디오 레벨에 따라 입 부분 밝기를 미세하게 조절하여 말하는 효과 생성
+        오디오 레벨에 따라 입 부분에 눈에 보이는 변화 적용
         """
         try:
             # 오디오 레벨 계산
@@ -686,18 +691,32 @@ class AvatarRenderer:
             result = frame.copy()
             h, w = frame.shape[:2]
 
-            # 입 영역 (하단 1/3, 중앙 영역)
-            mouth_top = int(h * 0.6)
-            mouth_bottom = int(h * 0.8)
-            mouth_left = int(w * 0.35)
-            mouth_right = int(w * 0.65)
+            # 입 영역 (더 넓은 영역)
+            mouth_top = int(h * 0.55)
+            mouth_bottom = int(h * 0.85)
+            mouth_left = int(w * 0.25)
+            mouth_right = int(w * 0.75)
 
-            # 입 영역에 미세한 밝기 변화 적용
+            # 입 영역에 밝기 변화 적용
             mouth_region = result[mouth_top:mouth_bottom, mouth_left:mouth_right].astype(np.float32)
 
-            # 오디오 에너지에 따른 밝기 변화 (최대 10% 밝게)
-            brightness_factor = 1.0 + (energy * 0.1)
+            # 오디오 에너지에 따른 밝기 변화 (최대 20% 밝게) - 효과 증가
+            brightness_factor = 1.0 + (energy * 0.2)
             mouth_region = mouth_region * brightness_factor
+
+            # 턱 영역에 미세한 확대 효과 (입 벌림 시뮬레이션)
+            scale_factor = 1.0 + energy * 0.03
+            if scale_factor != 1.0:
+                mouth_h, mouth_w = mouth_region.shape[:2]
+                new_h = int(mouth_h * scale_factor)
+                new_w = int(mouth_w * scale_factor)
+                if new_h > 0 and new_w > 0:
+                    scaled = cv2.resize(mouth_region.astype(np.uint8), (new_w, new_h))
+                    # 중앙 크롭
+                    start_y = (new_h - mouth_h) // 2
+                    start_x = (new_w - mouth_w) // 2
+                    if start_y >= 0 and start_x >= 0:
+                        mouth_region = scaled[start_y:start_y+mouth_h, start_x:start_x+mouth_w].astype(np.float32)
 
             # 클리핑
             result[mouth_top:mouth_bottom, mouth_left:mouth_right] = np.clip(

@@ -348,20 +348,20 @@ class MuseTalkModel:
 
         # 모델이 로드되지 않았으면 간단한 시뮬레이션 사용
         if self._unet is None:
-            logger.debug("UNet not loaded, using simple lipsync simulation")
+            logger.warning("⚠️ UNet not loaded, using simple lipsync simulation")
             return self._apply_simple_lipsync(source_frame, audio_chunk)
 
         try:
             import torch
 
             # 오디오 특징 추출
-            logger.debug(f"Extracting audio features: audio_chunk shape={audio_chunk.shape}, sample_rate={audio_sample_rate}")
+            logger.info(f"🎤 Extracting audio features: audio_chunk shape={audio_chunk.shape}, sample_rate={audio_sample_rate}")
             audio_features = self._extract_audio_features(audio_chunk, audio_sample_rate)
-            logger.debug(f"Audio features extracted: shape={audio_features.shape}")
+            logger.info(f"🎤 Audio features extracted: shape={audio_features.shape}")
 
             # VAE가 없으면 fallback
             if self._vae is None:
-                logger.warning("VAE not available, using simple fallback")
+                logger.warning("⚠️ VAE not available, using simple fallback")
                 return self._apply_simple_lipsync(source_frame, audio_chunk)
             
             # 얼굴 영역 추출 (전체 프레임 사용, 256x256으로 리사이즈)
@@ -453,29 +453,33 @@ class MuseTalkModel:
                 try:
                     # UNet 추론 (MuseTalk realtime_inference.py 방식)
                     # UNet2DConditionModel은 BaseOutput 객체를 반환하며 .sample 속성을 가짐
+                    logger.info(f"🔄 UNet inference starting - latent: {latent_input.shape}, audio: {audio_features.shape}")
                     unet_output = self._unet.model(
                         latent_input,
                         timesteps,
                         encoder_hidden_states=audio_features
                     )
-                    
+
                     # .sample 속성 접근 (UNet2DConditionModel의 반환값)
                     pred_latents = unet_output.sample
-                    
-                    logger.debug(f"UNet output: {pred_latents.shape}")
+
+                    logger.info(f"✅ UNet output: {pred_latents.shape}")
                 except Exception as e:
-                    logger.error(f"UNet inference failed: {e}", exc_info=True)
+                    logger.error(f"❌ UNet inference failed: {e}", exc_info=True)
                     logger.error(f"Error details - latent_input shape: {latent_input.shape}, dtype: {latent_input.dtype}")
                     logger.error(f"Error details - audio_features shape: {audio_features.shape}, dtype: {audio_features.dtype}")
                     logger.error(f"Error details - timesteps: {timesteps}")
                     import traceback
                     logger.error(f"Traceback: {traceback.format_exc()}")
-                    # 오류 발생 시 원본 프레임 반환
-                    return source_frame
+                    # 오류 발생 시 fallback 사용
+                    logger.warning("⚠️ UNet failed, using simple lipsync fallback")
+                    return self._apply_simple_lipsync(source_frame, audio_chunk)
                 
                 # VAE 디코딩
+                logger.info("🔄 VAE decoding starting...")
                 pred_latents = pred_latents.to(dtype=self._vae.vae.dtype)
                 recon = self._vae.decode_latents(pred_latents)
+                logger.info(f"✅ VAE decoded: type={type(recon)}, shape={recon.shape if hasattr(recon, 'shape') else 'N/A'}")
                 
                 # 첫 번째 프레임만 사용 (배치 크기 1)
                 if isinstance(recon, (list, tuple)):
@@ -549,6 +553,7 @@ class MuseTalkModel:
             try:
                 result_frame = cv2.resize(output_np, (w, h), interpolation=cv2.INTER_LINEAR)
                 if result_frame is not None and result_frame.shape[:2] == (h, w):
+                    logger.info(f"✅ MuseTalk lip sync SUCCESS: output shape={result_frame.shape}")
                     return result_frame
                 else:
                     logger.warning(f"Resize result invalid: {result_frame.shape if result_frame is not None else None}, returning source frame")
@@ -558,11 +563,12 @@ class MuseTalkModel:
                 return source_frame
 
         except Exception as e:
-            logger.error(f"MuseTalk inference error: {e}", exc_info=True)
+            logger.error(f"❌ MuseTalk inference error: {e}", exc_info=True)
             import traceback
             logger.error(f"Traceback: {traceback.format_exc()}")
-            # 오류 발생 시 원본 프레임 반환
-            return source_frame
+            # 오류 발생 시 fallback 사용
+            logger.warning("⚠️ MuseTalk failed, using simple lipsync fallback")
+            return self._apply_simple_lipsync(source_frame, audio_chunk)
 
     def _extract_audio_features(
         self,
@@ -822,8 +828,10 @@ class MuseTalkModel:
         """
         간단한 립싱크 효과 (모델 없을 때 폴백)
 
-        오디오 에너지에 따라 입 부분 밝기 조절
+        오디오 에너지에 따라 입 부분 밝기 조절 - 눈에 보이도록 효과 증가
         """
+        import cv2
+
         # 오디오 에너지 계산
         energy = np.sqrt(np.mean(audio ** 2)) if len(audio) > 0 else 0
 
@@ -832,18 +840,38 @@ class MuseTalkModel:
 
         # 간단한 밝기 변화로 입 움직임 시뮬레이션
         result = frame.copy()
-
-        # 하단 1/3 영역에 약간의 밝기 변화
         h, w = frame.shape[:2]
-        mouth_region = result[int(h * 0.6):int(h * 0.85), int(w * 0.3):int(w * 0.7)]
 
-        brightness_change = int(energy * 30)
-        mouth_region = np.clip(
-            mouth_region.astype(np.int16) + brightness_change,
-            0, 255
+        # 입 영역 정의 (하단 1/3)
+        mouth_top = int(h * 0.55)
+        mouth_bottom = int(h * 0.85)
+        mouth_left = int(w * 0.25)
+        mouth_right = int(w * 0.75)
+
+        mouth_region = result[mouth_top:mouth_bottom, mouth_left:mouth_right].astype(np.float32)
+
+        # 밝기 변화 증가 (30 -> 60)
+        brightness_change = energy * 60
+
+        # 입 영역에 밝기 변화 적용
+        mouth_region = mouth_region + brightness_change
+
+        # 턱 영역에 미세한 확대/축소 효과 (입 벌림 시뮬레이션)
+        scale_factor = 1.0 + energy * 0.03
+        if scale_factor != 1.0:
+            mouth_h, mouth_w = mouth_region.shape[:2]
+            new_h = int(mouth_h * scale_factor)
+            new_w = int(mouth_w * scale_factor)
+            if new_h > 0 and new_w > 0:
+                scaled = cv2.resize(mouth_region.astype(np.uint8), (new_w, new_h))
+                # 중앙 크롭
+                start_y = (new_h - mouth_h) // 2
+                start_x = (new_w - mouth_w) // 2
+                mouth_region = scaled[start_y:start_y+mouth_h, start_x:start_x+mouth_w].astype(np.float32)
+
+        result[mouth_top:mouth_bottom, mouth_left:mouth_right] = np.clip(
+            mouth_region, 0, 255
         ).astype(np.uint8)
-
-        result[int(h * 0.6):int(h * 0.85), int(w * 0.3):int(w * 0.7)] = mouth_region
 
         return result
 

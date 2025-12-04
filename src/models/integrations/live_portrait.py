@@ -474,15 +474,15 @@ class LivePortraitModel:
         """
         간단한 애니메이션 (모델 없을 때 폴백)
 
-        이미지 변환으로 움직임 시뮬레이션
+        이미지 변환으로 움직임 시뮬레이션 - 눈에 보이도록 효과 증가
         """
         h, w = image.shape[:2]
-        result = image.copy()
+        result = image.copy().astype(np.float32)
 
-        # 머리 움직임 시뮬레이션 (아핀 변환)
-        pitch = params.get("head_pitch", 0) * 8
-        yaw = params.get("head_yaw", 0) * 8
-        roll = params.get("head_roll", 0) * 3
+        # 머리 움직임 시뮬레이션 (아핀 변환) - 효과 증가
+        pitch = params.get("head_pitch", 0) * 15  # 8 -> 15
+        yaw = params.get("head_yaw", 0) * 15  # 8 -> 15
+        roll = params.get("head_roll", 0) * 8  # 3 -> 8
 
         # 중심점
         center = (w // 2, h // 2)
@@ -493,23 +493,27 @@ class LivePortraitModel:
         rotation_matrix[1, 2] += pitch
 
         result = cv2.warpAffine(
-            result,
+            result.astype(np.uint8),
             rotation_matrix,
             (w, h),
             borderMode=cv2.BORDER_REFLECT
-        )
+        ).astype(np.float32)
 
-        # 눈 깜빡임 효과 (상단 영역 어둡게)
+        # 호흡 효과 (전체 밝기 미세 변화)
+        breath = 1.0 + params.get("mouth_open", 0) * 0.05
+        result = result * breath
+
+        # 눈 깜빡임 효과 (상단 영역 어둡게) - 효과 증가
         blink = params.get("blink", 0)
         if blink > 0.1:
             eye_top = int(h * 0.25)
             eye_bottom = int(h * 0.4)
             eye_region = result[eye_top:eye_bottom, :].astype(np.float32)
-            darkness = blink * 0.4
+            darkness = blink * 0.6  # 0.4 -> 0.6
             eye_region = eye_region * (1 - darkness)
-            result[eye_top:eye_bottom, :] = np.clip(eye_region, 0, 255).astype(np.uint8)
+            result[eye_top:eye_bottom, :] = eye_region
 
-        return result
+        return np.clip(result, 0, 255).astype(np.uint8)
 
     def clear_cache(self) -> None:
         """소스 캐시 클리어"""
