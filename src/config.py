@@ -82,6 +82,12 @@ class Settings(BaseSettings):
     video_width: int = Field(default=512, description="Output video width")
     video_height: int = Field(default=512, description="Output video height")
 
+    # Lip Sync Settings
+    fast_lipsync: bool = Field(
+        default=True,
+        description="Use fast lip sync simulation instead of MuseTalk (faster but lower quality)"
+    )
+
     # TTS Settings
     tts_provider: Literal["zonos"] = Field(
         default="zonos", description="TTS provider (zonos for voice cloning)"

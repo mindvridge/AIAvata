@@ -45,6 +45,7 @@ class AvatarRenderer:
         target_fps: int = 30,
         device: str = "cuda",
         use_fp16: bool = True,
+        settings: Optional[Any] = None,
     ):
         """
         Initialize Avatar Renderer.
@@ -57,6 +58,7 @@ class AvatarRenderer:
             target_fps: 목표 프레임 레이트
             device: Compute device
             use_fp16: FP16 추론 사용 여부
+            settings: Application settings
         """
         self.idle_loops_dir = Path(idle_loops_dir)
         self.avatar_image_path = avatar_image_path
@@ -66,6 +68,7 @@ class AvatarRenderer:
         self.device = device
         self.use_fp16 = use_fp16
         self.frame_duration = 1.0 / target_fps
+        self._settings = settings
 
         # 상태
         self._idle_loops: Dict[Emotion, List[np.ndarray]] = {}
@@ -571,7 +574,12 @@ class AvatarRenderer:
             logger.debug("Empty audio chunk, skipping lip sync")
             return frame
 
-        # MuseTalk 모델이 있으면 사용
+        # fast_lipsync 설정 확인 - 빠른 시뮬레이션 사용
+        if hasattr(self, '_settings') and self._settings and getattr(self._settings, 'fast_lipsync', False):
+            logger.debug("Using fast lip sync simulation (fast_lipsync=True)")
+            return await self._simulate_lipsync(frame, audio_chunk)
+
+        # MuseTalk 모델이 있으면 사용 (fast_lipsync=False인 경우)
         if self._musetalk_model and hasattr(self._musetalk_model, 'process_frame'):
             try:
                 # bytes를 numpy array로 변환

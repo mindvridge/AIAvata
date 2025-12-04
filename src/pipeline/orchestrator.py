@@ -80,6 +80,7 @@ class PipelineOrchestrator:
             output_height=settings.video_height,
             target_fps=settings.target_fps,
             device=settings.get_device(),
+            settings=settings,
         )
 
         # 세션 관리
