@@ -569,8 +569,12 @@ class AvatarWebSocketHandler:
             logger.error(f"Auto idle streaming error: {e}")
         finally:
             if connection_id in self._active_connections:
-                # CONNECTED 상태로 복귀
-                state_machine.transition_to(ConnectionState.CONNECTED, force=True)
+                # busy 상태(PROCESSING, SPEAKING)가 아닐 때만 CONNECTED로 복귀
+                # 채팅 처리 중 idle 취소 시 상태 덮어쓰기 방지
+                if not state_machine.is_busy():
+                    state_machine.transition_to(ConnectionState.CONNECTED, force=True)
+                else:
+                    logger.debug(f"Skipping CONNECTED transition: already in {state_machine.state.value}")
 
     async def _handle_start_idle(
         self,
@@ -614,7 +618,9 @@ class AvatarWebSocketHandler:
 
         finally:
             if connection_id in self._active_connections:
-                state_machine.transition_to(ConnectionState.CONNECTED, force=True)
+                # busy 상태가 아닐 때만 CONNECTED로 복귀
+                if not state_machine.is_busy():
+                    state_machine.transition_to(ConnectionState.CONNECTED, force=True)
 
     async def _handle_chat(
         self,

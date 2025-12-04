@@ -614,7 +614,7 @@ class MuseTalkModel:
                                         mask = lip_mask
                                         logger.debug(f"Face parser mask created: {np.sum(mask > 0)} pixels")
                     except Exception as e:
-                        logger.warning(f"Face parser mask failed: {e}")
+                        logger.debug(f"Face parser mask skipped (using ellipse fallback): {e}")
                         mask = None
 
                 # Face Parser 실패 시 간단한 타원형 마스크 사용
