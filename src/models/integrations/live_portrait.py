@@ -531,10 +531,10 @@ class LivePortraitModel:
             x_s_info = wrapper_source["x_s_info"]
             source_256 = wrapper_source["source_256"]
 
-            # 모션 파라미터에서 변형 계산 (눈에 보이도록 스케일 증가)
-            head_pitch = motion_params.get("head_pitch", 0) * 50  # 10 -> 50
-            head_yaw = motion_params.get("head_yaw", 0) * 50  # 10 -> 50
-            head_roll = motion_params.get("head_roll", 0) * 25  # 5 -> 25
+            # 모션 파라미터에서 변형 계산 (자연스러운 미세 움직임)
+            head_pitch = motion_params.get("head_pitch", 0) * 20  # 50 -> 20
+            head_yaw = motion_params.get("head_yaw", 0) * 20  # 50 -> 20
+            head_roll = motion_params.get("head_roll", 0) * 10  # 25 -> 10
 
             # 새로운 키포인트 계산 (간단한 변형)
             x_d = x_s.clone()
@@ -547,10 +547,10 @@ class LivePortraitModel:
             else:
                 scale_val = float(scale)
 
-            # 키포인트에 오프셋 적용 (눈에 보이도록 스케일 증가)
+            # 키포인트에 오프셋 적용 (자연스러운 미세 움직임)
             offset = torch.zeros_like(x_d)
-            offset[:, :, 0] = head_yaw * 0.05 * scale_val  # 0.01 -> 0.05
-            offset[:, :, 1] = head_pitch * 0.05 * scale_val  # 0.01 -> 0.05
+            offset[:, :, 0] = head_yaw * 0.02 * scale_val  # 0.05 -> 0.02
+            offset[:, :, 1] = head_pitch * 0.02 * scale_val  # 0.05 -> 0.02
             x_d = x_d + offset
 
             # warp_decode로 새 프레임 생성

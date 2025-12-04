@@ -573,8 +573,9 @@ class MuseTalkModel:
                 # 원본 크기로 리사이즈
                 result_256 = cv2.resize(output_np, (256, 256), interpolation=cv2.INTER_LINEAR)
 
-                # 원본 프레임을 256x256으로 리사이즈
-                source_256 = cv2.resize(source_frame, (256, 256))
+                # 얼굴 크롭 이미지 사용 (전체 프레임이 아닌 face_crop 사용!)
+                # 버그 수정: source_frame 대신 face_crop 사용해야 함
+                source_256 = face_crop.copy()
 
                 # 🔑 핵심: Face Parser로 입 영역 마스크 생성
                 mask = None
