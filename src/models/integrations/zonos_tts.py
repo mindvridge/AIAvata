@@ -7,9 +7,22 @@ Zonos TTS - 고품질 다국어 음성 합성 및 음성 복제
 - 감정 제어: 행복, 슬픔, 분노, 두려움 등
 """
 
-# Windows에서 Triton 경고 비활성화 (torch import 전에 설정 필수)
+# torch.compile() 설정 (플랫폼별 최적화)
+# - Windows: Triton 미지원으로 비활성화
+# - Linux: 환경변수 ZONOS_ENABLE_COMPILE=1 설정 시 활성화 (속도 향상)
 import os
-os.environ["TORCHDYNAMO_DISABLE"] = "1"
+import platform
+
+if platform.system() == "Windows":
+    # Windows에서는 Triton 미지원으로 torch.compile() 비활성화
+    os.environ["TORCHDYNAMO_DISABLE"] = "1"
+elif os.environ.get("ZONOS_ENABLE_COMPILE", "0") != "1":
+    # Linux/Mac에서도 기본적으로 비활성화 (안정성)
+    # ZONOS_ENABLE_COMPILE=1 설정 시 활성화하여 속도 향상 가능
+    os.environ["TORCHDYNAMO_DISABLE"] = "1"
+else:
+    # ZONOS_ENABLE_COMPILE=1 설정 시 torch.compile() 활성화
+    pass  # torch.compile() 사용
 
 import asyncio
 import io
@@ -378,12 +391,21 @@ class ZonosTTSModel:
             logger.warning(f"Language {language} not supported, using 'en'")
             language = "en"
 
+        # 텍스트 길이 및 예상 생성 시간 로깅
+        text_len = len(text)
+        # Zonos는 약 21 tokens/second, 12 it/s 기준 예상 시간
+        estimated_tokens = int(text_len * 2.5)  # 대략적인 추정
+        estimated_seconds = estimated_tokens / 12  # 12 it/s 기준
+        logger.info(f"🎤 TTS 요청: 텍스트 길이={text_len}자, 예상 생성 시간≈{estimated_seconds:.1f}초")
+        logger.debug(f"TTS 텍스트 내용: '{text[:100]}{'...' if len(text) > 100 else ''}'")
+
         try:
             if self._model is None:
                 logger.warning("Zonos model not loaded, using mock audio")
                 return self._generate_mock_audio(len(text))
 
             import torch
+            import time
             from zonos.conditioning import make_cond_dict
 
             # 스피커 임베딩 가져오기
@@ -413,9 +435,16 @@ class ZonosTTSModel:
             conditioning = self._model.prepare_conditioning(cond_dict)
 
             # 음성 생성
+            gen_start = time.time()
             with torch.no_grad():
                 codes = self._model.generate(conditioning)
+                gen_time = time.time() - gen_start
+                logger.info(f"🎵 코드 생성 완료: {codes.shape[-1]} tokens, {gen_time:.2f}초 소요")
+
+                decode_start = time.time()
                 audio = self._model.autoencoder.decode(codes)
+                decode_time = time.time() - decode_start
+                logger.info(f"🔊 오디오 디코딩 완료: {decode_time:.2f}초 소요")
 
             # numpy 변환
             if isinstance(audio, torch.Tensor):
@@ -431,8 +460,10 @@ class ZonosTTSModel:
 
             # Zonos 샘플레이트 사용 (44100Hz)
             self.sample_rate = self._model.autoencoder.sampling_rate
+            audio_duration = len(audio) / self.sample_rate
 
-            logger.info(f"Synthesized audio: {len(audio)} samples at {self.sample_rate}Hz")
+            total_time = time.time() - gen_start
+            logger.info(f"✅ TTS 완료: {len(audio)} samples ({audio_duration:.2f}초 오디오) @ {self.sample_rate}Hz, 총 {total_time:.2f}초 소요")
             return audio
 
         except Exception as e:

@@ -108,7 +108,11 @@ class Settings(BaseSettings):
     tts_stream_buffer_ms: int = Field(
         default=100, description="Stream buffer size in milliseconds"
     )
-    
+    tts_enable_compile: bool = Field(
+        default=False,
+        description="Enable torch.compile() for Zonos TTS (Linux only, faster but may cause issues)"
+    )
+
     # STT Model Settings
     stt_model_path: str = Field(
         default="iic/SenseVoiceSmall",

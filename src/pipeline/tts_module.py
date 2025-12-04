@@ -44,6 +44,7 @@ class TTSModule:
         sample_rate: int = 24000,
         device: str = "cuda",
         voice_id: str = "default",
+        enable_compile: bool = False,
     ):
         """
         Initialize TTS Module.
@@ -55,6 +56,7 @@ class TTSModule:
             sample_rate: 출력 샘플레이트
             device: Compute device
             voice_id: 음성 ID
+            enable_compile: torch.compile() 활성화 (Linux only)
         """
         self.provider = provider
         self.voice = voice
@@ -62,6 +64,13 @@ class TTSModule:
         self.sample_rate = sample_rate
         self.device = device
         self.voice_id = voice_id
+        self.enable_compile = enable_compile
+
+        # torch.compile() 설정 (ZonosTTS import 전에 환경변수 설정 필요)
+        import os
+        if enable_compile:
+            os.environ["ZONOS_ENABLE_COMPILE"] = "1"
+            logger.info("🚀 torch.compile() 활성화됨 (TTS 속도 향상)")
 
         self._zonos_model = None
         self._initialized = False

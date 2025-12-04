@@ -71,6 +71,7 @@ class PipelineOrchestrator:
             voice_sample_path=settings.voice_sample_path,
             sample_rate=settings.tts_sample_rate,
             device=settings.get_device(),
+            enable_compile=getattr(settings, 'tts_enable_compile', False),
         )
 
         self.renderer = AvatarRenderer(
