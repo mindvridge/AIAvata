@@ -107,10 +107,19 @@ class LivePortraitModel:
                     "checkpoint_S": self.model_dir / "retargeting_models" / "stitching_retargeting_module.safetensors",
                 }
 
-                # 모델 파일 확인
-                models_exist = all(Path(p).exists() for p in model_config.values())
+                # 모델 파일 확인 및 상세 로깅
+                missing_files = []
+                for name, path in model_config.items():
+                    if not Path(path).exists():
+                        missing_files.append(f"  - {name}: {path}")
 
-                if not models_exist:
+                if missing_files:
+                    logger.error("❌ LivePortrait 모델 파일이 없습니다!")
+                    logger.error("   누락된 파일:")
+                    for f in missing_files:
+                        logger.error(f)
+                    logger.error("   다운로드 방법:")
+                    logger.error("   python -c \"from huggingface_hub import snapshot_download; snapshot_download('KwaiVGI/LivePortrait', local_dir='models/live_portrait')\"")
                     logger.warning("LivePortrait model files not found. Using fallback.")
                     self._use_fallback = True
                 else:

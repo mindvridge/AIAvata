@@ -579,42 +579,60 @@ class AvatarRenderer:
             logger.debug("Using fast lip sync simulation (fast_lipsync=True)")
             return await self._simulate_lipsync(frame, audio_chunk)
 
-        # MuseTalk 모델이 있으면 사용 (fast_lipsync=False인 경우)
-        if self._musetalk_model and hasattr(self._musetalk_model, 'process_frame'):
-            try:
-                # bytes를 numpy array로 변환
-                audio_array = np.frombuffer(audio_chunk, dtype=np.int16).astype(np.float32)
-                audio_array = audio_array / 32767.0  # Normalize to [-1, 1]
+        # MuseTalk 모델 상태 확인 및 상세 로깅
+        if not self._musetalk_model:
+            logger.error("❌ MuseTalk 모델이 초기화되지 않았습니다!")
+            return await self._simulate_lipsync(frame, audio_chunk)
 
-                # MuseTalk은 16kHz를 기대하므로 필요시 리샘플링
-                target_sample_rate = 16000
-                if audio_sample_rate != target_sample_rate:
-                    audio_array = self._resample_audio(
-                        audio_array, audio_sample_rate, target_sample_rate
-                    )
+        if not hasattr(self._musetalk_model, 'process_frame'):
+            logger.error("❌ MuseTalk 모델에 process_frame 메서드가 없습니다!")
+            return await self._simulate_lipsync(frame, audio_chunk)
 
-                logger.debug(f"Applying MuseTalk lip sync: frame shape={frame.shape}, audio samples={len(audio_array)}")
+        # MuseTalk 내부 상태 확인
+        if hasattr(self._musetalk_model, '_unet') and self._musetalk_model._unet is None:
+            logger.error("❌ MuseTalk UNet 모델이 로드되지 않았습니다! 모델 파일을 확인하세요.")
+            logger.error("   필요한 파일: models/musetalk/musetalkV15/unet.pth")
+            return await self._simulate_lipsync(frame, audio_chunk)
 
-                # MuseTalk 추론 (16kHz로 통일)
-                lipsync_frame = await self._musetalk_model.process_frame(
-                    source_frame=frame,
-                    audio_chunk=audio_array,
-                    audio_sample_rate=target_sample_rate,
+        if hasattr(self._musetalk_model, '_vae') and self._musetalk_model._vae is None:
+            logger.error("❌ MuseTalk VAE 모델이 로드되지 않았습니다!")
+            logger.error("   필요한 파일: models/musetalk/sd-vae-ft-mse/")
+            return await self._simulate_lipsync(frame, audio_chunk)
+
+        try:
+            # bytes를 numpy array로 변환
+            audio_array = np.frombuffer(audio_chunk, dtype=np.int16).astype(np.float32)
+            audio_array = audio_array / 32767.0  # Normalize to [-1, 1]
+
+            # MuseTalk은 16kHz를 기대하므로 필요시 리샘플링
+            target_sample_rate = 16000
+            if audio_sample_rate != target_sample_rate:
+                audio_array = self._resample_audio(
+                    audio_array, audio_sample_rate, target_sample_rate
                 )
 
-                if lipsync_frame is not None and lipsync_frame.shape == frame.shape:
-                    logger.debug(f"MuseTalk lip sync successful: output shape={lipsync_frame.shape}")
-                    return lipsync_frame
+            logger.debug(f"Applying MuseTalk lip sync: frame shape={frame.shape}, audio samples={len(audio_array)}")
+
+            # MuseTalk 추론 (16kHz로 통일)
+            lipsync_frame = await self._musetalk_model.process_frame(
+                source_frame=frame,
+                audio_chunk=audio_array,
+                audio_sample_rate=target_sample_rate,
+            )
+
+            if lipsync_frame is not None and lipsync_frame.shape == frame.shape:
+                logger.debug(f"MuseTalk lip sync successful: output shape={lipsync_frame.shape}")
+                return lipsync_frame
+            else:
+                if lipsync_frame is None:
+                    logger.error("❌ MuseTalk이 None을 반환했습니다. 내부 처리 오류입니다.")
                 else:
-                    if lipsync_frame is None:
-                        logger.warning("MuseTalk returned None, using simulation")
-                    else:
-                        logger.warning(f"MuseTalk output shape mismatch: expected {frame.shape}, got {lipsync_frame.shape}, using simulation")
-            except Exception as e:
-                logger.error(f"MuseTalk lip sync failed: {e}", exc_info=True)
+                    logger.error(f"❌ MuseTalk 출력 shape 불일치: 예상={frame.shape}, 실제={lipsync_frame.shape}")
+        except Exception as e:
+            logger.error(f"❌ MuseTalk 립싱크 실패: {e}", exc_info=True)
 
         # MuseTalk이 없거나 실패하면 간단한 시뮬레이션 사용
-        logger.debug("Using lip sync simulation")
+        logger.warning("⚠️ MuseTalk 실패로 밝기 시뮬레이션 사용")
         return await self._simulate_lipsync(frame, audio_chunk)
 
     def _resample_audio(

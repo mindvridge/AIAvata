@@ -143,7 +143,24 @@ class MuseTalkModel:
                     # musetalk.json 설정 파일 찾기
                     config_path = model_base_dir / "musetalk.json"
                     unet_path = model_base_dir / "unet.pth"
-                    
+
+                    # 필수 파일 확인
+                    missing_files = []
+                    if not config_path.exists():
+                        missing_files.append(f"  - musetalk.json: {config_path}")
+                    if not unet_path.exists():
+                        missing_files.append(f"  - unet.pth: {unet_path}")
+
+                    if missing_files:
+                        logger.error("❌ MuseTalk 필수 모델 파일이 없습니다!")
+                        logger.error("   누락된 파일:")
+                        for f in missing_files:
+                            logger.error(f)
+                        logger.error("   다운로드 방법: run.bat 다시 실행 또는:")
+                        logger.error("   python -c \"from huggingface_hub import snapshot_download; snapshot_download('TMElyralab/MuseTalk', local_dir='models/musetalk/hf_download')\"")
+                        self._initialized = True
+                        return False
+
                     if config_path.exists() and unet_path.exists():
                         logger.info(f"Loading MuseTalk models from {model_base_dir}")
                         
