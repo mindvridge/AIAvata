@@ -98,8 +98,22 @@ class LivePortraitModel:
                 import importlib.util
                 import importlib.machinery
 
-                # 모델 파일 경로 설정
-                model_config = {
+                # 모델 파일 경로 설정 (HuggingFace 다운로드 구조에 맞게)
+                # 우선순위: liveportrait/base_models/*.pth > *.safetensors
+                lp_base_models = self.model_dir / "liveportrait" / "base_models"
+                lp_retarget = self.model_dir / "liveportrait" / "retargeting_models"
+
+                # .pth 파일 경로 (HuggingFace 다운로드 구조)
+                model_config_pth = {
+                    "checkpoint_F": lp_base_models / "appearance_feature_extractor.pth",
+                    "checkpoint_M": lp_base_models / "motion_extractor.pth",
+                    "checkpoint_G": lp_base_models / "spade_generator.pth",
+                    "checkpoint_W": lp_base_models / "warping_module.pth",
+                    "checkpoint_S": lp_retarget / "stitching_retargeting_module.pth",
+                }
+
+                # .safetensors 파일 경로 (기존 구조)
+                model_config_safetensors = {
                     "checkpoint_F": self.model_dir / "appearance_feature_extractor.safetensors",
                     "checkpoint_M": self.model_dir / "motion_extractor.safetensors",
                     "checkpoint_G": self.model_dir / "spade_generator.safetensors",
@@ -107,53 +121,64 @@ class LivePortraitModel:
                     "checkpoint_S": self.model_dir / "retargeting_models" / "stitching_retargeting_module.safetensors",
                 }
 
-                # 모델 파일 확인 및 상세 로깅
-                missing_files = []
-                for name, path in model_config.items():
-                    if not Path(path).exists():
-                        missing_files.append(f"  - {name}: {path}")
+                # .pth 파일 먼저 확인
+                if all(Path(p).exists() for p in model_config_pth.values()):
+                    model_config = model_config_pth
+                    logger.info("✅ Found LivePortrait models in liveportrait/base_models/ (.pth format)")
+                elif all(Path(p).exists() for p in model_config_safetensors.values()):
+                    model_config = model_config_safetensors
+                    logger.info("✅ Found LivePortrait models in root directory (.safetensors format)")
+                else:
+                    # 어떤 파일들이 없는지 확인
+                    missing_pth = [f"  - {k}: {v}" for k, v in model_config_pth.items() if not Path(v).exists()]
+                    missing_safetensors = [f"  - {k}: {v}" for k, v in model_config_safetensors.items() if not Path(v).exists()]
 
-                if missing_files:
                     logger.error("❌ LivePortrait 모델 파일이 없습니다!")
-                    logger.error("   누락된 파일:")
-                    for f in missing_files:
+                    logger.error("   .pth 파일 (HuggingFace 다운로드 구조):")
+                    for f in missing_pth:
+                        logger.error(f)
+                    logger.error("   .safetensors 파일 (기존 구조):")
+                    for f in missing_safetensors:
                         logger.error(f)
                     logger.error("   다운로드 방법:")
                     logger.error("   python -c \"from huggingface_hub import snapshot_download; snapshot_download('KwaiVGI/LivePortrait', local_dir='models/live_portrait')\"")
                     logger.warning("LivePortrait model files not found. Using fallback.")
                     self._use_fallback = True
-                else:
-                    # LivePortrait 소스 경로에서 직접 모듈 로드 (sys.path/modules 오염 없이)
-                    try:
-                        # 직접 spec를 사용하여 로드 (패키지 충돌 방지)
-                        config_path = lp_src_path / "config" / "inference_config.py"
-                        pipeline_path = lp_src_path / "live_portrait_pipeline.py"
+                    self._initialized = True
+                    return True
 
-                        if config_path.exists() and pipeline_path.exists():
-                            # inference_config 모듈 로드
-                            spec_config = importlib.util.spec_from_file_location(
-                                "lp_inference_config", str(config_path)
-                            )
-                            lp_config_module = importlib.util.module_from_spec(spec_config)
-                            spec_config.loader.exec_module(lp_config_module)
-                            InferenceConfig = lp_config_module.InferenceConfig
+                # 모델 파일이 있으면 계속 진행
+                # LivePortrait 소스 경로에서 직접 모듈 로드 (sys.path/modules 오염 없이)
+                try:
+                    # 직접 spec를 사용하여 로드 (패키지 충돌 방지)
+                    config_path = lp_src_path / "config" / "inference_config.py"
+                    pipeline_path = lp_src_path / "live_portrait_pipeline.py"
 
-                            # 설정 및 파이프라인 초기화
-                            inference_cfg = InferenceConfig(
-                                device_id=0 if self.device == "cuda" else -1,
-                                flag_force_cpu=self.device != "cuda",
-                            )
+                    if config_path.exists() and pipeline_path.exists():
+                        # inference_config 모듈 로드
+                        spec_config = importlib.util.spec_from_file_location(
+                            "lp_inference_config", str(config_path)
+                        )
+                        lp_config_module = importlib.util.module_from_spec(spec_config)
+                        spec_config.loader.exec_module(lp_config_module)
+                        InferenceConfig = lp_config_module.InferenceConfig
 
-                            # 파이프라인은 많은 의존성이 있어 fallback 사용
-                            logger.info("LivePortrait config loaded, using fallback pipeline for stability")
-                            self._use_fallback = True
-                        else:
-                            logger.warning("LivePortrait source files not found")
-                            self._use_fallback = True
+                        # 설정 및 파이프라인 초기화
+                        inference_cfg = InferenceConfig(
+                            device_id=0 if self.device == "cuda" else -1,
+                            flag_force_cpu=self.device != "cuda",
+                        )
 
-                    except Exception as e:
-                        logger.warning(f"Failed to load LivePortrait modules directly: {e}")
+                        # 파이프라인은 많은 의존성이 있어 fallback 사용
+                        logger.info("LivePortrait config loaded, using fallback pipeline for stability")
                         self._use_fallback = True
+                    else:
+                        logger.warning("LivePortrait source files not found")
+                        self._use_fallback = True
+
+                except Exception as e:
+                    logger.warning(f"Failed to load LivePortrait modules directly: {e}")
+                    self._use_fallback = True
 
             except Exception as e:
                 logger.warning(f"Failed to initialize LivePortrait pipeline: {e}")
