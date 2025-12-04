@@ -554,7 +554,38 @@ class MuseTalkModel:
             
             # 리사이즈 시도
             try:
-                result_frame = cv2.resize(output_np, (w, h), interpolation=cv2.INTER_LINEAR)
+                # 원본 크기로 리사이즈
+                result_256 = cv2.resize(output_np, (256, 256), interpolation=cv2.INTER_LINEAR)
+
+                # 🔑 핵심: 입 영역만 합성 (전체 프레임 대체 X)
+                # Face parser로 마스크 생성하거나, 간단하게 하단 영역만 합성
+
+                # 원본 프레임을 256x256으로 리사이즈
+                source_256 = cv2.resize(source_frame, (256, 256))
+
+                # 입/턱 영역 마스크 생성 (하단 40% 영역)
+                mask = np.zeros((256, 256), dtype=np.float32)
+                mouth_top = int(256 * 0.55)  # 입 시작 위치
+                mouth_bottom = 256
+                mask[mouth_top:mouth_bottom, :] = 1.0
+
+                # 부드러운 블렌딩을 위한 그라데이션
+                gradient_height = int(256 * 0.1)  # 상단 10% 그라데이션
+                for i in range(gradient_height):
+                    alpha = i / gradient_height
+                    mask[mouth_top + i, :] = alpha
+
+                # 3채널로 확장
+                mask_3ch = np.stack([mask, mask, mask], axis=-1)
+
+                # 블렌딩: 원본 * (1-mask) + 결과 * mask
+                blended_256 = (source_256.astype(np.float32) * (1 - mask_3ch) +
+                               result_256.astype(np.float32) * mask_3ch)
+                blended_256 = np.clip(blended_256, 0, 255).astype(np.uint8)
+
+                # 원본 크기로 리사이즈
+                result_frame = cv2.resize(blended_256, (w, h), interpolation=cv2.INTER_LINEAR)
+
                 if result_frame is not None and result_frame.shape[:2] == (h, w):
                     logger.info(f"✅ MuseTalk lip sync SUCCESS: output shape={result_frame.shape}")
                     return result_frame
@@ -562,7 +593,7 @@ class MuseTalkModel:
                     logger.warning(f"Resize result invalid: {result_frame.shape if result_frame is not None else None}, returning source frame")
                     return source_frame
             except Exception as e:
-                logger.error(f"OpenCV resize failed: {e}, output_np shape: {output_np.shape}, target size: ({w}, {h}), returning source frame")
+                logger.error(f"OpenCV resize/blend failed: {e}, output_np shape: {output_np.shape}, target size: ({w}, {h}), returning source frame")
                 return source_frame
 
         except Exception as e:
