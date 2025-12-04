@@ -702,20 +702,28 @@ if not exist "external\LivePortrait\src" (
 REM Install LivePortrait dependencies (simpler approach - check key modules)
 echo       LivePortrait 의존성 확인 중...
 
-REM Check pykalman (most likely to be missing)
+REM Check pykalman (required)
 python -c "import pykalman" 2>nul
 if errorlevel 1 goto install_lp_deps
 
-REM Check insightface
-python -c "import insightface" 2>nul
-if errorlevel 1 goto install_lp_deps
-
-REM Check tyro
+REM Check tyro (required)
 python -c "import tyro" 2>nul
 if errorlevel 1 goto install_lp_deps
 
-REM All dependencies OK
+REM Check onnxruntime (required)
+python -c "import onnxruntime" 2>nul
+if errorlevel 1 goto install_lp_deps
+
+REM All required dependencies OK
 echo       LivePortrait 의존성 확인됨
+
+REM Optional: Try to install insightface if missing (may fail on some systems)
+python -c "import insightface" 2>nul
+if errorlevel 1 (
+    echo       insightface 설치 시도 중... (선택사항)
+    pip install insightface --prefer-binary -q 2>nul
+)
+
 goto lp_deps_done
 
 :install_lp_deps
@@ -725,7 +733,18 @@ pip install numpy==1.26.4 --no-cache-dir -q
 pip install onnxruntime-gpu onnx --no-cache-dir -q
 pip install tyro rich tqdm --no-cache-dir -q
 pip install imageio imageio-ffmpeg --no-cache-dir -q
-pip install pykalman insightface --no-cache-dir -q
+pip install pykalman --no-cache-dir -q
+
+REM insightface requires pre-built wheel on Windows (avoid C++ compile)
+echo       insightface 설치 중... (시간이 걸릴 수 있습니다)
+pip install insightface --prefer-binary -q 2>nul
+if errorlevel 1 (
+    echo       [참고] insightface 설치 실패. 대안 시도 중...
+    pip install onnxruntime insightface --no-build-isolation -q 2>nul
+    if errorlevel 1 (
+        echo       [경고] insightface 설치 실패. LivePortrait는 fallback 모드로 실행됩니다.
+    )
+)
 echo       LivePortrait 의존성 설치 완료!
 
 :lp_deps_done
