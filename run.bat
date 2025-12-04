@@ -700,7 +700,7 @@ if not exist "external\LivePortrait\src" (
 )
 
 REM Install LivePortrait dependencies
-python -c "import onnxruntime" 2>nul
+python -c "import onnxruntime; import tyro" 2>nul
 if errorlevel 1 (
     echo       LivePortrait 의존성 설치 중...
     REM Pin NumPy 1.x (prevent onnxruntime from installing NumPy 2.x)
