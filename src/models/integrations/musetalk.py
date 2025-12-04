@@ -568,19 +568,33 @@ class MuseTalkModel:
                         # FaceParsing은 PIL Image를 반환하므로 numpy로 변환 필요
                         from PIL import Image
                         parsing_result = self._face_parser(source_256)
+
+                        # 반환값 타입 확인 (디버깅)
+                        logger.debug(f"Face parser result type: {type(parsing_result)}")
+
+                        # int, None 등 유효하지 않은 반환값 처리
+                        if parsing_result is None or isinstance(parsing_result, (int, float, bool)):
+                            logger.debug(f"Face parser returned invalid type: {type(parsing_result)}")
+                            parsing_result = None
+
                         if parsing_result is not None:
                             # PIL Image → numpy array 변환
                             if isinstance(parsing_result, Image.Image):
                                 parsing_array = np.array(parsing_result)
-                            else:
+                            elif isinstance(parsing_result, np.ndarray):
                                 parsing_array = parsing_result
+                            elif hasattr(parsing_result, '__array__'):
+                                parsing_array = np.array(parsing_result)
+                            else:
+                                logger.debug(f"Unknown parsing result type: {type(parsing_result)}")
+                                parsing_array = None
 
-                            # MuseTalk face parsing labels (raw mode):
-                            # 실제 반환값은 255 (face) vs 0 (background)
-                            # 입 영역만 추출하려면 하단 영역 마스크 생성
-                            lip_mask = np.zeros((256, 256), dtype=np.float32)
-
-                            if hasattr(parsing_array, 'shape') and len(parsing_array.shape) >= 2:
+                            # parsing_array가 유효한 경우에만 처리
+                            if parsing_array is not None and hasattr(parsing_array, 'shape') and len(parsing_array.shape) >= 2:
+                                # MuseTalk face parsing labels (raw mode):
+                                # 실제 반환값은 255 (face) vs 0 (background)
+                                # 입 영역만 추출하려면 하단 영역 마스크 생성
+                                lip_mask = np.zeros((256, 256), dtype=np.float32)
                                 # 얼굴 영역 (255) 확인
                                 face_mask = (parsing_array > 128).astype(np.float32)
 
