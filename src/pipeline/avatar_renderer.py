@@ -13,7 +13,7 @@ import asyncio
 import logging
 import time
 from pathlib import Path
-from typing import AsyncGenerator, Dict, List, Optional
+from typing import Any, AsyncGenerator, Dict, List, Optional
 
 import cv2
 import numpy as np
