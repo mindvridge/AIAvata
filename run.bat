@@ -13,6 +13,26 @@ echo.
 cd /d "%~dp0"
 
 REM ============================================================
+REM 0. Cleanup corrupted packages and set pip timeout
+REM ============================================================
+echo [0/10] 환경 정리 중...
+
+REM Set pip timeout to prevent network errors (default 15 -> 120 seconds)
+set PIP_DEFAULT_TIMEOUT=120
+
+REM Clean up corrupted NumPy installation (-umpy folder)
+for /f "tokens=*" %%i in ('python -c "import site; print(site.getsitepackages()[0])" 2^>nul') do set SITE_PACKAGES=%%i
+if defined SITE_PACKAGES (
+    if exist "%SITE_PACKAGES%\-umpy*" (
+        echo       손상된 NumPy 폴더 정리 중...
+        rmdir /s /q "%SITE_PACKAGES%\-umpy" 2>nul
+        del /q "%SITE_PACKAGES%\-umpy*" 2>nul
+        for /d %%d in ("%SITE_PACKAGES%\~umpy*") do rmdir /s /q "%%d" 2>nul
+    )
+)
+echo       환경 정리 완료
+
+REM ============================================================
 REM 1. Python check
 REM ============================================================
 echo [1/10] Python 확인 중...
@@ -143,13 +163,22 @@ if not errorlevel 1 (
 
 REM Check PyTorch CUDA version (skip reinstall if already CUDA version)
 set NEED_PYTORCH_REINSTALL=0
+set PYTORCH_INSTALLED=0
 if %HAS_NVIDIA%==1 (
-    python -c "import torch; exit(0 if torch.cuda.is_available() else 1)" 2>nul
-    if errorlevel 1 (
-        set NEED_PYTORCH_REINSTALL=1
-        echo       CPU 버전 PyTorch 감지. CUDA 버전으로 업그레이드합니다...
+    REM First check if torch is installed at all
+    python -c "import torch; print(torch.__version__)" >nul 2>&1
+    if not errorlevel 1 (
+        set PYTORCH_INSTALLED=1
+        REM Then check if CUDA is available
+        python -c "import torch; exit(0 if torch.cuda.is_available() else 1)" 2>nul
+        if errorlevel 1 (
+            set NEED_PYTORCH_REINSTALL=1
+            echo       CPU 버전 PyTorch 감지. CUDA 버전으로 업그레이드합니다...
+        ) else (
+            echo       CUDA PyTorch 이미 설치됨
+        )
     ) else (
-        echo       CUDA PyTorch 이미 설치됨
+        echo       PyTorch 미설치. CUDA 버전으로 설치합니다...
     )
 )
 
@@ -311,9 +340,10 @@ if errorlevel 1 (
 
     REM Install PyTorch (auto-select GPU/CPU)
     if %HAS_NVIDIA%==1 (
-        echo       CUDA PyTorch 설치 중... (약 2GB 다운로드)
-        pip uninstall torch torchaudio torchvision -y 2>nul
-        pip install torch torchaudio torchvision --index-url https://download.pytorch.org/whl/cu121 -q
+        if %PYTORCH_INSTALLED%==0 (
+            echo       CUDA PyTorch 설치 중... (약 2GB 다운로드)
+            pip install torch torchaudio torchvision --index-url https://download.pytorch.org/whl/cu121 -q
+        )
     ) else (
         pip install torch torchaudio torchvision -q
     )
@@ -321,25 +351,32 @@ if errorlevel 1 (
     pip install fastapi uvicorn python-dotenv websockets aiofiles pydantic -q
     pip install "protobuf>=3.20,<5.0" -q
 
-    REM Install opencv-python (required by basicsr, facexlib, gfpgan, realesrgan)
-    pip uninstall opencv-python-headless opencv-contrib-python -y 2>nul
-    pip install opencv-python -q
+    REM Install opencv-python and opencv-contrib-python (required by basicsr, mediapipe)
+    pip uninstall opencv-python-headless -y 2>nul
+    pip install opencv-python opencv-contrib-python -q
 
     pip install openai livekit livekit-api -q
     pip install transformers diffusers huggingface_hub -q
     pip install funasr modelscope omegaconf kaldiio -q
-    pip install zonos pydub -q
-    pip install mediapipe librosa einops --no-cache-dir -q
+
+    REM Install zonos with --no-deps to avoid NumPy 2.x, then install missing deps manually
+    pip install pydub -q
+    pip install zonos --no-deps -q 2>nul
+    pip install scipy einops -q
+
+    pip install mediapipe librosa --no-cache-dir -q
 
     echo       패키지 설치 완료!
 ) else (
     echo       패키지 확인 완료
-    REM Run PyTorch CUDA upgrade even if existing packages present
+    REM Run PyTorch CUDA upgrade only if needed (not in a loop)
     if %NEED_PYTORCH_REINSTALL%==1 (
-        echo       CUDA PyTorch로 업그레이드 중... (약 2GB 다운로드)
-        pip uninstall torch torchaudio torchvision -y 2>nul
-        pip install torch torchaudio torchvision --index-url https://download.pytorch.org/whl/cu121 -q
-        echo       CUDA PyTorch 업그레이드 완료!
+        if %PYTORCH_INSTALLED%==1 (
+            echo       CUDA PyTorch로 업그레이드 중... (약 2GB 다운로드)
+            pip uninstall torch torchaudio torchvision -y 2>nul
+            pip install torch torchaudio torchvision --index-url https://download.pytorch.org/whl/cu121 -q
+            echo       CUDA PyTorch 업그레이드 완료!
+        )
     )
 )
 
