@@ -204,11 +204,22 @@ class LivePortraitModel:
 
                     logger.info("✅ LivePortrait config 모듈 임포트 성공!")
 
-                    # 설정 초기화
+                    # 모델 파일 절대 경로 설정 (LivePortrait의 상대 경로 문제 해결)
+                    lp_base_models_abs = self.model_dir.resolve() / "liveportrait" / "base_models"
+                    lp_retarget_abs = self.model_dir.resolve() / "liveportrait" / "retargeting_models"
+
+                    # 설정 초기화 - 절대 경로로 체크포인트 지정
                     inference_cfg = InferenceConfig(
                         device_id=0 if self.device == "cuda" else -1,
                         flag_force_cpu=self.device != "cuda",
+                        # 체크포인트 절대 경로 지정
+                        checkpoint_F=str(lp_base_models_abs / "appearance_feature_extractor.pth"),
+                        checkpoint_M=str(lp_base_models_abs / "motion_extractor.pth"),
+                        checkpoint_G=str(lp_base_models_abs / "spade_generator.pth"),
+                        checkpoint_W=str(lp_base_models_abs / "warping_module.pth"),
+                        checkpoint_S=str(lp_retarget_abs / "stitching_retargeting_module.pth"),
                     )
+                    logger.info(f"   체크포인트 경로: {lp_base_models_abs}")
                     crop_cfg = CropConfig()
 
                     # LivePortraitPipeline 로드 시도 (복잡한 의존성이 있어 실패할 수 있음)
