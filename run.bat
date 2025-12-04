@@ -772,7 +772,7 @@ echo       LivePortrait 의존성 설치 완료!
 :lp_deps_done
 
 REM Download LivePortrait model files
-if not exist "models\live_portrait\appearance_feature_extractor.safetensors" (
+if not exist "models\live_portrait\liveportrait\base_models\appearance_feature_extractor.pth" (
     echo       LivePortrait 모델 파일 다운로드 중... (약 400MB)
 
     if not exist "models\live_portrait" mkdir "models\live_portrait"
@@ -782,6 +782,26 @@ if not exist "models\live_portrait\appearance_feature_extractor.safetensors" (
     echo       LivePortrait 모델 다운로드 완료!
 ) else (
     echo       LivePortrait 모델 확인됨
+)
+
+REM Create symbolic link for LivePortrait pretrained_weights (required by LivePortrait pipeline)
+REM LivePortrait expects models in external/LivePortrait/pretrained_weights/ but we download to models/live_portrait/
+if not exist "external\LivePortrait\pretrained_weights" (
+    echo       LivePortrait 모델 링크 생성 중...
+
+    REM Get absolute path to models/live_portrait
+    for %%i in ("models\live_portrait") do set "MODEL_PATH=%%~fi"
+
+    REM Create junction (directory symbolic link on Windows)
+    mklink /J "external\LivePortrait\pretrained_weights" "%MODEL_PATH%" >nul 2>&1
+    if errorlevel 1 (
+        echo       [참고] Junction 생성 실패. 폴더 복사로 대체합니다...
+        xcopy "models\live_portrait\*" "external\LivePortrait\pretrained_weights\" /s /e /i /y /q >nul
+    ) else (
+        echo       LivePortrait 모델 링크 생성 완료!
+    )
+) else (
+    echo       LivePortrait 모델 링크 확인됨
 )
 
 REM ============================================================
