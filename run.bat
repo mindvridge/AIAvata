@@ -699,15 +699,34 @@ if not exist "external\LivePortrait\src" (
     )
 )
 
-REM Install LivePortrait dependencies
-python -c "import onnxruntime; import tyro" 2>nul
-if errorlevel 1 (
+REM Install LivePortrait dependencies (check each one separately)
+set LP_DEPS_OK=1
+
+python -c "import onnxruntime" 2>nul
+if errorlevel 1 set LP_DEPS_OK=0
+
+python -c "import tyro" 2>nul
+if errorlevel 1 set LP_DEPS_OK=0
+
+python -c "import rich" 2>nul
+if errorlevel 1 set LP_DEPS_OK=0
+
+python -c "import tqdm" 2>nul
+if errorlevel 1 set LP_DEPS_OK=0
+
+python -c "import cv2" 2>nul
+if errorlevel 1 set LP_DEPS_OK=0
+
+if %LP_DEPS_OK%==0 (
     echo       LivePortrait 의존성 설치 중...
     REM Pin NumPy 1.x (prevent onnxruntime from installing NumPy 2.x)
     pip install numpy==1.26.4 --no-cache-dir -q
     pip install onnxruntime-gpu onnx --no-cache-dir -q
     pip install tyro rich tqdm --no-cache-dir -q
+    pip install imageio imageio-ffmpeg --no-cache-dir -q
     echo       LivePortrait 의존성 설치 완료!
+) else (
+    echo       LivePortrait 의존성 확인됨
 )
 
 REM Download LivePortrait model files
