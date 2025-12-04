@@ -717,6 +717,12 @@ if errorlevel 1 set LP_DEPS_OK=0
 python -c "import cv2" 2>nul
 if errorlevel 1 set LP_DEPS_OK=0
 
+python -c "import pykalman" 2>nul
+if errorlevel 1 set LP_DEPS_OK=0
+
+python -c "import insightface" 2>nul
+if errorlevel 1 set LP_DEPS_OK=0
+
 if %LP_DEPS_OK%==0 (
     echo       LivePortrait 의존성 설치 중...
     REM Pin NumPy 1.x (prevent onnxruntime from installing NumPy 2.x)
@@ -724,6 +730,7 @@ if %LP_DEPS_OK%==0 (
     pip install onnxruntime-gpu onnx --no-cache-dir -q
     pip install tyro rich tqdm --no-cache-dir -q
     pip install imageio imageio-ffmpeg --no-cache-dir -q
+    pip install pykalman insightface --no-cache-dir -q
     echo       LivePortrait 의존성 설치 완료!
 ) else (
     echo       LivePortrait 의존성 확인됨
