@@ -20,16 +20,33 @@ echo [0/10] 환경 정리 중...
 REM Set pip timeout to prevent network errors (default 15 -> 120 seconds)
 set PIP_DEFAULT_TIMEOUT=120
 
-REM Clean up corrupted NumPy installation (-umpy folder)
+REM Get site-packages path
 for /f "tokens=*" %%i in ('python -c "import site; print(site.getsitepackages()[0])" 2^>nul') do set SITE_PACKAGES=%%i
+
+REM Clean up ALL corrupted/temp folders (more aggressive cleanup)
 if defined SITE_PACKAGES (
-    if exist "%SITE_PACKAGES%\-umpy*" (
-        echo       손상된 NumPy 폴더 정리 중...
-        rmdir /s /q "%SITE_PACKAGES%\-umpy" 2>nul
-        del /q "%SITE_PACKAGES%\-umpy*" 2>nul
-        for /d %%d in ("%SITE_PACKAGES%\~umpy*") do rmdir /s /q "%%d" 2>nul
+    echo       손상된 패키지 정리 중...
+
+    REM Remove corrupted -umpy folder
+    if exist "%SITE_PACKAGES%\-umpy" rmdir /s /q "%SITE_PACKAGES%\-umpy" 2>nul
+
+    REM Remove any temp folders starting with ~ or -
+    for /d %%d in ("%SITE_PACKAGES%\~*") do (
+        echo       삭제: %%~nxd
+        rmdir /s /q "%%d" 2>nul
     )
+    for /d %%d in ("%SITE_PACKAGES%\-*") do (
+        echo       삭제: %%~nxd
+        rmdir /s /q "%%d" 2>nul
+    )
+
+    REM Remove .dist-info for corrupted packages
+    for /d %%d in ("%SITE_PACKAGES%\~*.dist-info") do rmdir /s /q "%%d" 2>nul
 )
+
+REM Upgrade pip to avoid old version issues
+python -m pip install --upgrade pip -q 2>nul
+
 echo       환경 정리 완료
 
 REM ============================================================
@@ -336,7 +353,7 @@ if errorlevel 1 (
     echo       패키지 설치 중... (최초 1회, 약 5-10분 소요)
 
     REM Install NumPy 1.x first (prevent other packages from installing NumPy 2.x)
-    pip install numpy==1.26.4 --no-cache-dir -q
+    pip install numpy==1.26.4 --no-cache-dir -q 2>nul || pip install numpy==1.26.4 --no-cache-dir --user -q
 
     REM Install PyTorch (auto-select GPU/CPU)
     if %HAS_NVIDIA%==1 (
@@ -351,9 +368,9 @@ if errorlevel 1 (
     pip install fastapi uvicorn python-dotenv websockets aiofiles pydantic -q
     pip install "protobuf>=3.20,<5.0" -q
 
-    REM Install opencv-python and opencv-contrib-python (required by basicsr, mediapipe)
-    pip uninstall opencv-python-headless -y 2>nul
-    pip install opencv-python opencv-contrib-python -q
+    REM Install opencv-python compatible with NumPy 1.x (4.8.x supports numpy<2)
+    pip uninstall opencv-python-headless opencv-python opencv-contrib-python -y 2>nul
+    pip install opencv-python==4.8.1.78 opencv-contrib-python==4.8.1.78 -q 2>nul || pip install opencv-python==4.8.1.78 opencv-contrib-python==4.8.1.78 --user -q
 
     pip install openai livekit livekit-api -q
     pip install transformers diffusers huggingface_hub -q
@@ -365,6 +382,9 @@ if errorlevel 1 (
     pip install scipy einops -q
 
     pip install mediapipe librosa --no-cache-dir -q
+
+    REM Final NumPy pin (ensure 1.x after all installs)
+    pip install numpy==1.26.4 --no-cache-dir -q 2>nul
 
     echo       패키지 설치 완료!
 ) else (
