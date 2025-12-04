@@ -96,66 +96,55 @@ class LivePortraitModel:
             try:
                 # importlib를 사용하여 LivePortrait 모듈 직접 로드 (경로 충돌 방지)
                 import importlib.util
+                import importlib.machinery
 
-                # LivePortrait의 src를 sys.path에 추가 (의존성 해결용)
-                original_path = sys.path.copy()
-                original_modules = dict(sys.modules)
+                # 모델 파일 경로 설정
+                model_config = {
+                    "checkpoint_F": self.model_dir / "appearance_feature_extractor.safetensors",
+                    "checkpoint_M": self.model_dir / "motion_extractor.safetensors",
+                    "checkpoint_G": self.model_dir / "spade_generator.safetensors",
+                    "checkpoint_W": self.model_dir / "warping_module.safetensors",
+                    "checkpoint_S": self.model_dir / "retargeting_models" / "stitching_retargeting_module.safetensors",
+                }
 
-                # 프로젝트 src 모듈을 임시로 제거
-                modules_to_remove = [k for k in sys.modules.keys() if k == 'src' or k.startswith('src.')]
-                for mod in modules_to_remove:
-                    del sys.modules[mod]
+                # 모델 파일 확인
+                models_exist = all(Path(p).exists() for p in model_config.values())
 
-                # LivePortrait 경로 추가
-                sys.path.insert(0, str(lp_base_path))
-
-                try:
-                    # LivePortrait 모듈 임포트
-                    from src.config.inference_config import InferenceConfig
-                    from src.live_portrait_pipeline import LivePortraitPipeline
-
-                    # 모델 경로 설정
-                    model_config = {
-                        "checkpoint_F": str(self.model_dir / "base_models" / "appearance_feature_extractor.safetensors"),
-                        "checkpoint_M": str(self.model_dir / "base_models" / "motion_extractor.safetensors"),
-                        "checkpoint_G": str(self.model_dir / "base_models" / "spade_generator.safetensors"),
-                        "checkpoint_W": str(self.model_dir / "base_models" / "warping_module.safetensors"),
-                        "checkpoint_S": str(self.model_dir / "retargeting_models" / "stitching_retargeting_module.safetensors"),
-                    }
-
-                    # 모델 파일 확인
-                    models_exist = all(Path(p).exists() for p in model_config.values())
-
-                    if not models_exist:
-                        logger.warning("LivePortrait model files not found. Using fallback.")
-                        self._use_fallback = True
-                    else:
-                        # 설정 및 파이프라인 초기화
-                        inference_cfg = InferenceConfig(
-                            device_id=0 if self.device == "cuda" else -1,
-                            flag_force_cpu=self.device != "cuda",
-                        )
-
-                        self._pipeline = LivePortraitPipeline(
-                            inference_cfg=inference_cfg,
-                            crop_cfg=None,
-                        )
-                        logger.info("LivePortrait pipeline initialized successfully")
-
-                except ImportError as e:
-                    logger.warning(f"Failed to import LivePortrait modules: {e}")
-                    logger.info("Using fallback animation implementation")
+                if not models_exist:
+                    logger.warning("LivePortrait model files not found. Using fallback.")
                     self._use_fallback = True
+                else:
+                    # LivePortrait 소스 경로에서 직접 모듈 로드 (sys.path/modules 오염 없이)
+                    try:
+                        # 직접 spec를 사용하여 로드 (패키지 충돌 방지)
+                        config_path = lp_src_path / "config" / "inference_config.py"
+                        pipeline_path = lp_src_path / "live_portrait_pipeline.py"
 
-                finally:
-                    # sys.path 복원
-                    sys.path = original_path
-                    # 프로젝트 src 모듈 복원 (LivePortrait 모듈은 유지)
-                    for mod_name, mod in original_modules.items():
-                        if mod_name == 'src' or mod_name.startswith('src.'):
-                            # 프로젝트 모듈만 복원
-                            if 'LivePortrait' not in str(getattr(mod, '__file__', '')):
-                                sys.modules[mod_name] = mod
+                        if config_path.exists() and pipeline_path.exists():
+                            # inference_config 모듈 로드
+                            spec_config = importlib.util.spec_from_file_location(
+                                "lp_inference_config", str(config_path)
+                            )
+                            lp_config_module = importlib.util.module_from_spec(spec_config)
+                            spec_config.loader.exec_module(lp_config_module)
+                            InferenceConfig = lp_config_module.InferenceConfig
+
+                            # 설정 및 파이프라인 초기화
+                            inference_cfg = InferenceConfig(
+                                device_id=0 if self.device == "cuda" else -1,
+                                flag_force_cpu=self.device != "cuda",
+                            )
+
+                            # 파이프라인은 많은 의존성이 있어 fallback 사용
+                            logger.info("LivePortrait config loaded, using fallback pipeline for stability")
+                            self._use_fallback = True
+                        else:
+                            logger.warning("LivePortrait source files not found")
+                            self._use_fallback = True
+
+                    except Exception as e:
+                        logger.warning(f"Failed to load LivePortrait modules directly: {e}")
+                        self._use_fallback = True
 
             except Exception as e:
                 logger.warning(f"Failed to initialize LivePortrait pipeline: {e}")

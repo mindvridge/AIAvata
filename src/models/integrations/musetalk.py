@@ -241,9 +241,43 @@ class MuseTalkModel:
                             self._vae = None
                         
                         # Face Parsing 초기화 (선택적, device 인자 없음)
+                        # FaceParsing은 './models/face-parse-bisent/79999_iter.pth' 경로 기대
                         try:
-                            self._face_parser = FaceParsing()
-                            logger.info("Face parser initialized")
+                            import shutil
+                            face_parser_model_path = Path("./models/face-parse-bisent/79999_iter.pth")
+                            face_parser_model_path.parent.mkdir(parents=True, exist_ok=True)
+
+                            # 모델 파일이 없으면 여러 경로에서 복사 시도
+                            if not face_parser_model_path.exists():
+                                source_paths = [
+                                    Path(self.model_dir) / "face-parse-bisent" / "79999_iter.pth",
+                                    Path("models/musetalk/face-parse-bisent/79999_iter.pth"),
+                                    Path("models/musetalk/hf_download/models/face-parse-bisent/79999_iter.pth"),
+                                ]
+                                for src_path in source_paths:
+                                    if src_path.exists():
+                                        logger.info(f"Copying face parser model from {src_path}")
+                                        shutil.copy(str(src_path), str(face_parser_model_path))
+                                        break
+
+                            # resnet18 모델도 확인
+                            resnet_path = Path("./models/face-parse-bisent/resnet18-5c106cde.pth")
+                            if not resnet_path.exists():
+                                resnet_sources = [
+                                    Path(self.model_dir) / "face-parse-bisent" / "resnet18-5c106cde.pth",
+                                    Path("models/musetalk/face-parse-bisent/resnet18-5c106cde.pth"),
+                                ]
+                                for src_path in resnet_sources:
+                                    if src_path.exists():
+                                        shutil.copy(str(src_path), str(resnet_path))
+                                        break
+
+                            if face_parser_model_path.exists():
+                                self._face_parser = FaceParsing()
+                                logger.info("Face parser initialized")
+                            else:
+                                logger.warning("Face parser model not found, skipping (non-critical)")
+                                self._face_parser = None
                         except Exception as e:
                             logger.warning(f"Face parser initialization failed (non-critical): {e}")
                             self._face_parser = None
