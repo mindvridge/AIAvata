@@ -635,18 +635,14 @@ class MuseTalkModel:
                 # Face Parser 실패 시 간단한 타원형 마스크 사용
                 if mask is None:
                     mask = np.zeros((256, 256), dtype=np.float32)
-                    # 입 위치 추정 (얼굴 크롭 기준 - 중앙 약간 아래)
-                    # 256x256 얼굴 크롭에서:
-                    # - 이마: 0-40 (0-15%)
-                    # - 눈: 60-100 (23-39%)
-                    # - 코: 100-145 (39-57%)
-                    # - 입: 145-190 (57-74%)
-                    # - 턱: 190-220 (74-86%)
-                    center_x, center_y = 128, 165  # 입 중심 (180 -> 165로 조정)
-                    axes = (45, 25)  # 타원 크기를 작게 조정 (50,30 -> 45,25)
+                    # 입 위치 추정 (얼굴 크롭 기준)
+                    # 256x256 얼굴 크롭에서 입은 보통 y=140~200 영역
+                    center_x, center_y = 128, 175  # 입 중심
+                    axes = (60, 40)  # 타원 크기 증가 - 입 영역을 더 크게
                     cv2.ellipse(mask, (center_x, center_y), axes, 0, 0, 360, 1.0, -1)
-                    # 가우시안 블러로 부드럽게
-                    mask = cv2.GaussianBlur(mask, (21, 21), 0)
+                    # 가우시안 블러를 줄여서 효과를 더 선명하게
+                    mask = cv2.GaussianBlur(mask, (15, 15), 0)
+                    logger.debug(f"Using ellipse mask: center=({center_x},{center_y}), axes={axes}")
 
                 # 3채널로 확장
                 mask_3ch = np.stack([mask, mask, mask], axis=-1)

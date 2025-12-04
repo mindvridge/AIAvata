@@ -522,36 +522,49 @@ class LivePortraitModel:
         wrapper_source: Dict[str, Any],
         motion_params: Dict[str, float],
     ) -> np.ndarray:
-        """LivePortrait Wrapper로 프레임 생성"""
+        """LivePortrait Wrapper로 프레임 생성 - 자연스러운 머리 회전과 표정 적용"""
         try:
             import torch
+            import copy
 
             f_s = wrapper_source["f_s"]
             x_s = wrapper_source["x_s"]
             x_s_info = wrapper_source["x_s_info"]
             source_256 = wrapper_source["source_256"]
 
-            # 모션 파라미터에서 변형 계산 (자연스러운 미세 움직임)
-            head_pitch = motion_params.get("head_pitch", 0) * 20  # 50 -> 20
-            head_yaw = motion_params.get("head_yaw", 0) * 20  # 50 -> 20
-            head_roll = motion_params.get("head_roll", 0) * 10  # 25 -> 10
+            # 모션 파라미터 추출
+            head_pitch = motion_params.get("head_pitch", 0)
+            head_yaw = motion_params.get("head_yaw", 0)
+            head_roll = motion_params.get("head_roll", 0)
+            blink = motion_params.get("blink", 0)
+            mouth_open = motion_params.get("mouth_open", 0)
 
-            # 새로운 키포인트 계산 (간단한 변형)
-            x_d = x_s.clone()
+            # x_s_info를 복사하여 수정 (원본 보존)
+            x_d_info = copy.deepcopy(x_s_info)
 
-            # 머리 회전 적용 (간단한 선형 보간)
-            # 표정 변화 없이 위치만 약간 변경
-            scale = x_s_info["scale"]
-            if isinstance(scale, torch.Tensor):
-                scale_val = scale.item() if scale.numel() == 1 else scale[0].item()
-            else:
-                scale_val = float(scale)
+            # 1. 회전 적용 (pitch, yaw, roll) - 원본 값에 변화량 추가
+            # LivePortrait의 회전 값은 라디안 단위
+            if "pitch" in x_d_info:
+                x_d_info["pitch"] = x_s_info["pitch"] + torch.tensor([[head_pitch * 0.15]])
+            if "yaw" in x_d_info:
+                x_d_info["yaw"] = x_s_info["yaw"] + torch.tensor([[head_yaw * 0.15]])
+            if "roll" in x_d_info:
+                x_d_info["roll"] = x_s_info["roll"] + torch.tensor([[head_roll * 0.08]])
 
-            # 키포인트에 오프셋 적용 (자연스러운 미세 움직임)
-            offset = torch.zeros_like(x_d)
-            offset[:, :, 0] = head_yaw * 0.02 * scale_val  # 0.05 -> 0.02
-            offset[:, :, 1] = head_pitch * 0.02 * scale_val  # 0.05 -> 0.02
-            x_d = x_d + offset
+            # 2. 표정 적용 (눈 깜빡임, 입 움직임)
+            if "exp" in x_d_info and x_d_info["exp"] is not None:
+                exp = x_d_info["exp"].clone()
+                # 눈 깜빡임 (exp의 처음 몇 개 계수)
+                if blink > 0.1:
+                    exp[0, 0] = blink * 0.5  # 왼쪽 눈
+                    exp[0, 1] = blink * 0.5  # 오른쪽 눈
+                # 입 열림 (exp의 중간 계수)
+                if mouth_open > 0:
+                    exp[0, 25] = mouth_open * 0.3
+                x_d_info["exp"] = exp
+
+            # 새로운 키포인트 계산 (transform_keypoint 사용)
+            x_d = self._wrapper.transform_keypoint(x_d_info)
 
             # warp_decode로 새 프레임 생성
             ret_dct = self._wrapper.warp_decode(f_s, x_s, x_d)
