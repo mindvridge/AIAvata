@@ -724,7 +724,9 @@ class AvatarWebSocketHandler:
     ):
         """
         TTS로 음성 생성 및 립싱크 비디오 스트리밍
-        텍스트 응답과 오디오를 동시에 전송하여 동기화
+
+        동기화 전략: 립싱크 프레임을 먼저 생성/버퍼링한 후,
+        오디오와 비디오 프레임을 함께 전송하여 동기화
 
         Args:
             websocket: WebSocket 연결
@@ -764,7 +766,7 @@ class AvatarWebSocketHandler:
                 text=response_text,
                 voice_id=None,  # 기본 음성 사용
             )
-            
+
             logger.debug(f"TTS generation result: samples={len(audio_data_np) if audio_data_np is not None else 0}")
 
             if audio_data_np is None or len(audio_data_np) == 0:
@@ -775,28 +777,19 @@ class AvatarWebSocketHandler:
             audio_data_bytes = self.pipeline.tts._audio_to_bytes(audio_data_np)
             logger.debug(f"TTS audio generated: {len(audio_data_np)} samples ({len(audio_data_bytes)} bytes)")
 
-            # TTS 오디오와 텍스트 응답을 동시에 전송 (동기화)
-            import base64
-            audio_base64 = base64.b64encode(audio_data_bytes).decode('utf-8')
-
-            # 텍스트 응답 먼저 전송
+            # 텍스트 응답 먼저 전송 (UI 업데이트용)
             await self._send_json(websocket, {
                 "type": "chat_response",
                 "text": response_text,
                 "user_message": user_message,
             })
 
-            # 오디오 데이터 바로 이어서 전송
-            await self._send_json(websocket, {
-                "type": "audio_data",
-                "data": audio_base64,
-                "sample_rate": self.pipeline.tts.sample_rate,
-            })
-            logger.debug("Sent chat_response and audio_data together for synchronization")
+            # ===== 동기화 전략: 먼저 립싱크 프레임 생성 후 오디오와 함께 전송 =====
+            logger.info(f"🎬 Pre-generating lip sync frames for synchronization...")
+            await self._send_status(websocket, "processing")
 
             # bytes를 AsyncGenerator로 변환
             async def audio_stream_generator():
-                # 오디오를 청크로 나누어 전송
                 chunk_size = self.pipeline.settings.tts_chunk_size
                 offset = 0
                 while offset < len(audio_data_bytes):
@@ -804,47 +797,85 @@ class AvatarWebSocketHandler:
                     yield chunk
                     offset += chunk_size
 
-            # 립싱크가 적용된 비디오 프레임 스트림 생성
+            # 립싱크 프레임을 먼저 모두 생성하여 버퍼링
+            video_frames = []
             try:
-                logger.info(f"🎬 Starting lip sync rendering: sample_rate={self.pipeline.tts.sample_rate}, audio_bytes={len(audio_data_bytes)}")
-                await self._send_status(websocket, "speaking")
-
-                frame_count = 0
                 async for frame in self.pipeline.renderer.render_with_audio(
                     audio_stream=audio_stream_generator(),
                     audio_sample_rate=self.pipeline.tts.sample_rate,
                 ):
-                    # 연결이 끊어지면 중지
-                    if connection_id not in self._active_connections:
-                        logger.warning("Connection closed during lip sync streaming")
-                        break
+                    video_frames.append(frame.data)
+                    if len(video_frames) % 30 == 0:
+                        logger.debug(f"Generated {len(video_frames)} lip sync frames...")
 
-                    # 비디오 프레임 전송
-                    await websocket.send_bytes(frame.data)
-                    frame_count += 1
-
-                    # 처음 몇 프레임은 INFO 레벨로 로깅
-                    if frame_count <= 3:
-                        logger.info(f"🎤 Lip sync frame #{frame_count} sent ({len(frame.data)} bytes)")
-                    elif frame_count % 30 == 0:  # 30프레임마다 로그
-                        logger.info(f"🎤 Sent {frame_count} lip sync frames")
-
-                logger.info(f"✅ Lip sync video stream completed: {frame_count} frames sent")
-
-                # 립싱크 완료 후 CONNECTED 상태로 전이 및 idle 스트림 재시작
-                if connection_id in self._active_connections:
-                    state_machine.transition_to(ConnectionState.CONNECTED)
-                    await self._send_state_status(websocket, state_machine.state)
-
-                    connection = self._active_connections[connection_id]
-                    if not connection.get("idle_task") or (hasattr(connection["idle_task"], 'done') and connection["idle_task"].done()):
-                        logger.debug("Restarting idle stream after lip sync")
-                        idle_task = asyncio.create_task(
-                            self._start_idle_stream_background(websocket, session_id, connection_id)
-                        )
-                        connection["idle_task"] = idle_task
+                logger.info(f"✅ Pre-generated {len(video_frames)} lip sync frames")
             except Exception as e:
-                logger.error(f"Error in render_with_audio: {e}", exc_info=True)
+                logger.error(f"Error generating lip sync frames: {e}", exc_info=True)
+                video_frames = []
+
+            # 연결 확인
+            if connection_id not in self._active_connections:
+                logger.warning("Connection closed during lip sync generation")
+                return
+
+            # ===== 오디오와 비디오를 동기화하여 전송 =====
+            import base64
+            audio_base64 = base64.b64encode(audio_data_bytes).decode('utf-8')
+
+            # 오디오 데이터 전송 (클라이언트에서 재생 시작)
+            await self._send_json(websocket, {
+                "type": "audio_data",
+                "data": audio_base64,
+                "sample_rate": self.pipeline.tts.sample_rate,
+                "frame_count": len(video_frames),  # 프레임 수 전달
+            })
+            logger.info(f"🔊 Audio sent, starting synchronized video stream ({len(video_frames)} frames)")
+
+            await self._send_status(websocket, "speaking")
+
+            # 비디오 프레임을 FPS에 맞춰 전송 (오디오와 동기화)
+            target_fps = self.pipeline.settings.target_fps
+            frame_duration = 1.0 / target_fps
+
+            frame_count = 0
+            for frame_data in video_frames:
+                frame_start = time.time()
+
+                # 연결이 끊어지면 중지
+                if connection_id not in self._active_connections:
+                    logger.warning("Connection closed during lip sync streaming")
+                    break
+
+                # 비디오 프레임 전송
+                await websocket.send_bytes(frame_data)
+                frame_count += 1
+
+                # 처음 몇 프레임은 INFO 레벨로 로깅
+                if frame_count <= 3:
+                    logger.info(f"🎤 Lip sync frame #{frame_count} sent ({len(frame_data)} bytes)")
+                elif frame_count % 30 == 0:
+                    logger.info(f"🎤 Sent {frame_count} lip sync frames")
+
+                # FPS에 맞춰 대기 (오디오와 동기화)
+                elapsed = time.time() - frame_start
+                sleep_time = frame_duration - elapsed
+                if sleep_time > 0:
+                    await asyncio.sleep(sleep_time)
+
+            logger.info(f"✅ Lip sync video stream completed: {frame_count} frames sent (synchronized)")
+
+            # 립싱크 완료 후 CONNECTED 상태로 전이 및 idle 스트림 재시작
+            if connection_id in self._active_connections:
+                state_machine.transition_to(ConnectionState.CONNECTED)
+                await self._send_state_status(websocket, state_machine.state)
+
+                connection = self._active_connections[connection_id]
+                if not connection.get("idle_task") or (hasattr(connection["idle_task"], 'done') and connection["idle_task"].done()):
+                    logger.debug("Restarting idle stream after lip sync")
+                    idle_task = asyncio.create_task(
+                        self._start_idle_stream_background(websocket, session_id, connection_id)
+                    )
+                    connection["idle_task"] = idle_task
 
         except Exception as e:
             logger.error(f"TTS/Lipsync processing error: {e}")

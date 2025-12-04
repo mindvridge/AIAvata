@@ -621,11 +621,11 @@ class MuseTalkModel:
                                     lip_region_start = int(h_mask * 0.5)
                                     lip_mask[lip_region_start:, :] = face_mask[lip_region_start:, :]
 
-                                    # 마스크 확장 및 블러
+                                    # 마스크 확장 및 블러 (블러 감소로 선명한 효과)
                                     if np.sum(lip_mask) > 100:
-                                        kernel = np.ones((5, 5), np.uint8)
-                                        lip_mask = cv2.dilate(lip_mask, kernel, iterations=2)
-                                        lip_mask = cv2.GaussianBlur(lip_mask, (21, 21), 0)
+                                        kernel = np.ones((3, 3), np.uint8)
+                                        lip_mask = cv2.dilate(lip_mask, kernel, iterations=1)
+                                        lip_mask = cv2.GaussianBlur(lip_mask, (11, 11), 0)
                                         mask = lip_mask
                                         logger.debug(f"Face parser mask created: {np.sum(mask > 0)} pixels")
                     except Exception as e:
@@ -636,20 +636,32 @@ class MuseTalkModel:
                 if mask is None:
                     mask = np.zeros((256, 256), dtype=np.float32)
                     # 입 위치 추정 (얼굴 크롭 기준)
-                    # 256x256 얼굴 크롭에서 입은 보통 y=140~200 영역
-                    center_x, center_y = 128, 175  # 입 중심
-                    axes = (60, 40)  # 타원 크기 증가 - 입 영역을 더 크게
+                    # 256x256 얼굴 크롭에서 입은 보통 y=160~210 영역 (턱 포함)
+                    # 마스크를 더 작고 정확한 입 영역에 집중
+                    center_x, center_y = 128, 185  # 입 중심 (약간 아래로)
+                    axes = (45, 30)  # 타원 크기 축소 - 입 영역만 정확히
                     cv2.ellipse(mask, (center_x, center_y), axes, 0, 0, 360, 1.0, -1)
-                    # 가우시안 블러를 줄여서 효과를 더 선명하게
-                    mask = cv2.GaussianBlur(mask, (15, 15), 0)
+                    # 가우시안 블러를 더 줄여서 선명한 효과
+                    mask = cv2.GaussianBlur(mask, (11, 11), 0)
                     logger.debug(f"Using ellipse mask: center=({center_x},{center_y}), axes={axes}")
 
                 # 3채널로 확장
                 mask_3ch = np.stack([mask, mask, mask], axis=-1)
 
-                # 블렌딩: 원본 * (1-mask) + 결과 * mask
-                blended_256 = (source_256.astype(np.float32) * (1 - mask_3ch) +
-                               result_256.astype(np.float32) * mask_3ch)
+                # 블렌딩 강도 조절 (0.0~1.0, 높을수록 립싱크 효과 강함)
+                blend_alpha = 0.85  # 85% 립싱크 결과 사용
+
+                # VAE 출력과 원본의 차이 로깅 (디버그용)
+                if logger.isEnabledFor(logging.DEBUG):
+                    diff = np.abs(result_256.astype(np.float32) - source_256.astype(np.float32))
+                    mouth_region_diff = diff[155:215, 83:173]  # 입 영역만
+                    avg_diff = np.mean(mouth_region_diff)
+                    logger.debug(f"VAE output mouth region diff from source: avg={avg_diff:.1f}")
+
+                # 블렌딩: 원본 * (1-mask*alpha) + 결과 * (mask*alpha)
+                effective_mask = mask_3ch * blend_alpha
+                blended_256 = (source_256.astype(np.float32) * (1 - effective_mask) +
+                               result_256.astype(np.float32) * effective_mask)
                 blended_256 = np.clip(blended_256, 0, 255).astype(np.uint8)
 
                 # 얼굴 bbox가 있으면 해당 영역에만 결과 적용
