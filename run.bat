@@ -592,15 +592,15 @@ REM Download 79999_iter.pth (if not present)
 if not exist "models\face-parse-bisent\79999_iter.pth" (
     echo       79999_iter.pth 모델 다운로드 중...
 
-    REM Method 1: Direct download from MuseTalk HF repo (using huggingface_hub)
-    echo       방법 1: HuggingFace Hub에서 다운로드...
-    python -c "from huggingface_hub import hf_hub_download; import shutil; import os; f=hf_hub_download(repo_id='TMElyralab/MuseTalk', filename='models/face-parse-bisent/79999_iter.pth'); os.makedirs('models/face-parse-bisent', exist_ok=True); shutil.copy(f, 'models/face-parse-bisent/79999_iter.pth'); print('Downloaded:', f)" 2>nul
+    REM Method 1: Download from vivym/face-parsing-bisenet (reliable alternative repo)
+    echo       방법 1: HuggingFace vivym/face-parsing-bisenet에서 다운로드...
+    python -c "from huggingface_hub import hf_hub_download; import shutil; import os; f=hf_hub_download(repo_id='vivym/face-parsing-bisenet', filename='79999_iter.pth'); os.makedirs('models/face-parse-bisent', exist_ok=True); shutil.copy(f, 'models/face-parse-bisent/79999_iter.pth'); print('Downloaded:', f)" 2>nul
 )
 
-REM If method 1 fails - Method 2: Direct URL download with wget/curl and verification
+REM If method 1 fails - Method 2: Direct URL from vivym repo
 if not exist "models\face-parse-bisent\79999_iter.pth" (
     echo       방법 2: HuggingFace 직접 URL에서 다운로드...
-    curl -L -o "models\face-parse-bisent\79999_iter.pth" "https://huggingface.co/TMElyralab/MuseTalk/resolve/main/models/face-parse-bisent/79999_iter.pth" --progress-bar
+    curl -L -o "models\face-parse-bisent\79999_iter.pth" "https://huggingface.co/vivym/face-parsing-bisenet/resolve/main/79999_iter.pth" --progress-bar
     REM Check file size (should be >50MB, not HTML error page)
     for %%A in ("models\face-parse-bisent\79999_iter.pth") do (
         if %%~zA LSS 1000000 (
@@ -610,10 +610,15 @@ if not exist "models\face-parse-bisent\79999_iter.pth" (
     )
 )
 
-REM If method 2 fails - Method 2.5: Python requests download
+REM If method 2 fails - Method 2.5: Try ManyOtherFunctions repo (another mirror)
 if not exist "models\face-parse-bisent\79999_iter.pth" (
-    echo       방법 2.5: Python requests로 다운로드...
-    python -c "import requests; import os; os.makedirs('models/face-parse-bisent', exist_ok=True); r=requests.get('https://huggingface.co/TMElyralab/MuseTalk/resolve/main/models/face-parse-bisent/79999_iter.pth', allow_redirects=True); open('models/face-parse-bisent/79999_iter.pth','wb').write(r.content) if len(r.content)>1000000 else None; print('Downloaded' if len(r.content)>1000000 else 'Failed')" 2>nul
+    echo       방법 2.5: ManyOtherFunctions 미러에서 다운로드...
+    curl -L -o "models\face-parse-bisent\79999_iter.pth" "https://huggingface.co/ManyOtherFunctions/face-parse-bisent/resolve/main/79999_iter.pth" --progress-bar
+    for %%A in ("models\face-parse-bisent\79999_iter.pth") do (
+        if %%~zA LSS 1000000 (
+            del "models\face-parse-bisent\79999_iter.pth" 2>nul
+        )
+    )
 )
 
 REM If method 2.5 fails - Method 3: Copy from already downloaded musetalk folder
@@ -646,7 +651,8 @@ if exist "models\face-parse-bisent\79999_iter.pth" (
 
 if not exist "models\face-parse-bisent\79999_iter.pth" (
     echo       [경고] Face parser 모델 다운로드 실패. 립싱크 품질이 저하될 수 있습니다.
-    echo       수동 다운로드: https://huggingface.co/TMElyralab/MuseTalk/tree/main/models/face-parse-bisent
+    echo       수동 다운로드: https://huggingface.co/vivym/face-parsing-bisenet/blob/main/79999_iter.pth
+    echo       다운로드 후 models\face-parse-bisent\ 폴더에 저장하세요.
 )
 exit /b
 

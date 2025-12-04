@@ -293,7 +293,10 @@ class MuseTalkModel:
                                 self._face_parser = FaceParsing()
                                 logger.info("Face parser initialized")
                             else:
-                                logger.warning("Face parser model not found, skipping (non-critical)")
+                                logger.warning("⚠️ Face parser 모델 없음 (79999_iter.pth)")
+                                logger.warning("   다운로드: https://huggingface.co/vivym/face-parsing-bisenet/resolve/main/79999_iter.pth")
+                                logger.warning("   저장 경로: models/face-parse-bisent/79999_iter.pth")
+                                logger.warning("   (립싱크는 작동하지만 품질이 저하될 수 있습니다)")
                                 self._face_parser = None
                         except Exception as e:
                             logger.warning(f"Face parser initialization failed (non-critical): {e}")
