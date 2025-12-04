@@ -717,11 +717,26 @@ if errorlevel 1 goto install_lp_deps
 REM All required dependencies OK
 echo       LivePortrait 의존성 확인됨
 
-REM Optional: Try to install insightface if missing (may fail on some systems)
+REM Optional: Try to install insightface if missing (use pre-built wheel for Windows)
 python -c "import insightface" 2>nul
 if errorlevel 1 (
-    echo       insightface 설치 시도 중... (선택사항)
-    pip install insightface --prefer-binary -q 2>nul
+    echo       insightface 설치 중... (사전 빌드된 휠 사용)
+    REM Download pre-built wheel for Python 3.10 Windows
+    if not exist "tools" mkdir tools
+    curl -L -o "tools\insightface.whl" "https://github.com/Gourieff/Assets/raw/main/Insightface/insightface-0.7.3-cp310-cp310-win_amd64.whl" --progress-bar 2>nul
+    if exist "tools\insightface.whl" (
+        pip install "tools\insightface.whl" -q
+        if not errorlevel 1 (
+            echo       insightface 설치 완료!
+            del "tools\insightface.whl" 2>nul
+        ) else (
+            echo       [경고] insightface 휠 설치 실패. pip로 재시도...
+            pip install insightface --prefer-binary -q 2>nul
+        )
+    ) else (
+        echo       [경고] insightface 휠 다운로드 실패. pip로 재시도...
+        pip install insightface --prefer-binary -q 2>nul
+    )
 )
 
 goto lp_deps_done
@@ -735,15 +750,22 @@ pip install tyro rich tqdm --no-cache-dir -q
 pip install imageio imageio-ffmpeg --no-cache-dir -q
 pip install pykalman --no-cache-dir -q
 
-REM insightface requires pre-built wheel on Windows (avoid C++ compile)
-echo       insightface 설치 중... (시간이 걸릴 수 있습니다)
-pip install insightface --prefer-binary -q 2>nul
-if errorlevel 1 (
-    echo       [참고] insightface 설치 실패. 대안 시도 중...
-    pip install onnxruntime insightface --no-build-isolation -q 2>nul
-    if errorlevel 1 (
-        echo       [경고] insightface 설치 실패. LivePortrait는 fallback 모드로 실행됩니다.
+REM insightface: Download pre-built wheel for Windows (avoid C++ compile errors)
+echo       insightface 설치 중... (사전 빌드된 휠 사용)
+if not exist "tools" mkdir tools
+curl -L -o "tools\insightface.whl" "https://github.com/Gourieff/Assets/raw/main/Insightface/insightface-0.7.3-cp310-cp310-win_amd64.whl" --progress-bar 2>nul
+if exist "tools\insightface.whl" (
+    pip install "tools\insightface.whl" -q
+    if not errorlevel 1 (
+        echo       insightface 설치 완료!
+        del "tools\insightface.whl" 2>nul
+    ) else (
+        echo       [경고] Python 3.10 휠 호환 문제. pip로 재시도...
+        pip install insightface --prefer-binary -q 2>nul
     )
+) else (
+    echo       [경고] insightface 휠 다운로드 실패. pip로 재시도...
+    pip install insightface --prefer-binary -q 2>nul
 )
 echo       LivePortrait 의존성 설치 완료!
 
