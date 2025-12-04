@@ -153,12 +153,9 @@ class LivePortraitModel:
                     return True
 
                 # 모델 파일이 있으면 계속 진행
-                # LivePortrait를 패키지로 임포트 (sys.path에 루트 디렉토리 추가됨)
+                # importlib을 사용하여 LivePortrait 모듈 직접 로드 (AIAvata의 src와 충돌 방지)
                 try:
-                    # LivePortrait 루트를 sys.path에 추가
-                    lp_root = lp_src_path.parent
-                    if str(lp_root) not in sys.path:
-                        sys.path.insert(0, str(lp_root))
+                    import importlib.util
 
                     # __init__.py 파일 생성 (패키지로 인식되도록)
                     for subdir in ["", "config", "utils", "modules"]:
@@ -169,26 +166,74 @@ class LivePortraitModel:
                             except Exception:
                                 pass
 
-                    # 이제 패키지로 임포트
-                    from src.config.inference_config import InferenceConfig
-                    from src.config.crop_config import CropConfig
-                    from src.live_portrait_pipeline import LivePortraitPipeline
+                    # 고유한 모듈 이름으로 LivePortrait 모듈 로드 (네임스페이스 충돌 방지)
+                    def load_module_from_path(module_name: str, file_path: Path):
+                        """파일 경로에서 모듈을 로드하는 헬퍼 함수"""
+                        spec = importlib.util.spec_from_file_location(module_name, str(file_path))
+                        if spec is None or spec.loader is None:
+                            raise ImportError(f"Cannot load module from {file_path}")
+                        module = importlib.util.module_from_spec(spec)
+                        sys.modules[module_name] = module
+                        spec.loader.exec_module(module)
+                        return module
 
-                    logger.info("✅ LivePortrait 모듈 임포트 성공!")
+                    # LivePortrait의 src를 lp_src라는 고유 이름으로 등록
+                    lp_root = lp_src_path.parent
+                    if str(lp_root) not in sys.path:
+                        sys.path.insert(0, str(lp_root))
 
-                    # 설정 및 파이프라인 초기화
+                    # 먼저 기본 유틸 모듈들을 로드 (의존성 순서대로)
+                    # lp_src.config 패키지 설정
+                    lp_config_init = lp_src_path / "config" / "__init__.py"
+                    load_module_from_path("lp_src", lp_src_path / "__init__.py")
+                    load_module_from_path("lp_src.config", lp_config_init)
+
+                    # InferenceConfig 로드
+                    inference_config_module = load_module_from_path(
+                        "lp_src.config.inference_config",
+                        lp_src_path / "config" / "inference_config.py"
+                    )
+                    InferenceConfig = inference_config_module.InferenceConfig
+
+                    # CropConfig 로드
+                    crop_config_module = load_module_from_path(
+                        "lp_src.config.crop_config",
+                        lp_src_path / "config" / "crop_config.py"
+                    )
+                    CropConfig = crop_config_module.CropConfig
+
+                    logger.info("✅ LivePortrait config 모듈 임포트 성공!")
+
+                    # 설정 초기화
                     inference_cfg = InferenceConfig(
                         device_id=0 if self.device == "cuda" else -1,
                         flag_force_cpu=self.device != "cuda",
                     )
                     crop_cfg = CropConfig()
 
-                    # 파이프라인 초기화
-                    self._pipeline = LivePortraitPipeline(
-                        inference_cfg=inference_cfg,
-                        crop_cfg=crop_cfg
-                    )
-                    logger.info("✅ LivePortrait 파이프라인 초기화 성공!")
+                    # LivePortraitPipeline 로드 시도 (복잡한 의존성이 있어 실패할 수 있음)
+                    try:
+                        # utils 모듈들 먼저 등록
+                        load_module_from_path("lp_src.utils", lp_src_path / "utils" / "__init__.py")
+                        load_module_from_path("lp_src.modules", lp_src_path / "modules" / "__init__.py")
+
+                        pipeline_module = load_module_from_path(
+                            "lp_src.live_portrait_pipeline",
+                            lp_src_path / "live_portrait_pipeline.py"
+                        )
+                        LivePortraitPipeline = pipeline_module.LivePortraitPipeline
+
+                        # 파이프라인 초기화
+                        self._pipeline = LivePortraitPipeline(
+                            inference_cfg=inference_cfg,
+                            crop_cfg=crop_cfg
+                        )
+                        logger.info("✅ LivePortrait 파이프라인 초기화 성공!")
+
+                    except Exception as pipeline_error:
+                        logger.warning(f"⚠️ LivePortrait 파이프라인 로드 실패: {pipeline_error}")
+                        logger.warning("   Idle 애니메이션은 간단한 변환을 사용합니다.")
+                        self._use_fallback = True
 
                 except ImportError as e:
                     logger.error(f"❌ LivePortrait 모듈 임포트 실패: {e}")
