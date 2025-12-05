@@ -5,7 +5,7 @@ Configuration management for the Realtime AI Avatar Service.
 """
 
 from functools import lru_cache
-from typing import Literal
+from typing import Literal, Optional
 
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -57,6 +57,9 @@ class Settings(BaseSettings):
     )
     default_avatar_image: str = Field(
         default="assets/avatars/avata.png", description="Default avatar image path"
+    )
+    driving_video_path: Optional[str] = Field(
+        default=None, description="Driving video path for idle animation (LivePortrait)"
     )
     voices_dir: str = Field(
         default="assets/voices", description="Directory for Zonos TTS voice profiles"

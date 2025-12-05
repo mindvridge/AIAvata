@@ -40,6 +40,7 @@ class AvatarRenderer:
         self,
         idle_loops_dir: str = "assets/idle_loops",
         avatar_image_path: Optional[str] = None,
+        driving_video_path: Optional[str] = None,
         output_width: int = 512,
         output_height: int = 512,
         target_fps: int = 30,
@@ -53,6 +54,7 @@ class AvatarRenderer:
         Args:
             idle_loops_dir: Idle 루프 영상 디렉토리
             avatar_image_path: 아바타 소스 이미지 경로
+            driving_video_path: 드라이빙 비디오 경로 (idle 애니메이션용)
             output_width: 출력 비디오 너비
             output_height: 출력 비디오 높이
             target_fps: 목표 프레임 레이트
@@ -62,6 +64,7 @@ class AvatarRenderer:
         """
         self.idle_loops_dir = Path(idle_loops_dir)
         self.avatar_image_path = avatar_image_path
+        self.driving_video_path = driving_video_path
         self.output_width = output_width
         self.output_height = output_height
         self.target_fps = target_fps
@@ -176,6 +179,7 @@ class AvatarRenderer:
                 model_dir="models/live_portrait",
                 device=self.device,
                 fp16=self.use_fp16,
+                driving_video_path=self.driving_video_path,
             )
             success = await self._live_portrait_model.initialize()
 
@@ -188,6 +192,21 @@ class AvatarRenderer:
                         self._source_image
                     )
                     logger.info("Source image features extracted")
+
+                # 드라이빙 비디오 로드 (있으면)
+                if self.driving_video_path:
+                    await self._live_portrait_model.load_driving_video(self.driving_video_path)
+                else:
+                    # 기본 드라이빙 비디오 사용 시도
+                    default_driving_paths = [
+                        "assets/avatars/avata_ani.mp4",
+                        "external/LivePortrait/assets/examples/driving/d0.mp4",
+                    ]
+                    for path in default_driving_paths:
+                        if Path(path).exists():
+                            logger.info(f"Using default driving video: {path}")
+                            await self._live_portrait_model.load_driving_video(path)
+                            break
             else:
                 logger.warning("LivePortrait initialization returned False, using fallback")
 

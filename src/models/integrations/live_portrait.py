@@ -55,6 +55,7 @@ class LivePortraitModel:
         model_dir: str = LIVE_PORTRAIT_MODEL_DIR,
         device: str = "cuda",
         fp16: bool = True,
+        driving_video_path: Optional[str] = None,
     ):
         """
         Initialize LivePortrait Model.
@@ -63,10 +64,12 @@ class LivePortraitModel:
             model_dir: 모델 파일 디렉토리
             device: 연산 디바이스
             fp16: FP16 추론 사용 여부
+            driving_video_path: 드라이빙 비디오 경로 (idle 애니메이션용)
         """
         self.model_dir = Path(model_dir)
         self.device = device
         self.fp16 = fp16
+        self.driving_video_path = driving_video_path
 
         # LivePortrait 파이프라인
         self._pipeline = None
@@ -75,6 +78,10 @@ class LivePortraitModel:
 
         # 소스 이미지 캐시
         self._source_cache: Dict[str, Dict[str, Any]] = {}
+
+        # 드라이빙 비디오 모션 캐시
+        self._driving_motions: Optional[List[Dict[str, Any]]] = None
+        self._driving_video_fps: int = 30
 
         self._initialized = False
         self._use_fallback = False
@@ -409,6 +416,172 @@ class LivePortraitModel:
         self._source_cache[source_id] = features
         return features
 
+    async def load_driving_video(self, video_path: str) -> bool:
+        """
+        드라이빙 비디오 로드 및 모션 추출
+
+        Args:
+            video_path: 드라이빙 비디오 경로
+
+        Returns:
+            성공 여부
+        """
+        if not self._initialized:
+            await self.initialize()
+
+        if self._wrapper is None:
+            logger.warning("LivePortrait wrapper not initialized, cannot load driving video")
+            return False
+
+        video_path = Path(video_path)
+        if not video_path.exists():
+            logger.error(f"Driving video not found: {video_path}")
+            return False
+
+        logger.info(f"Loading driving video: {video_path}")
+
+        try:
+            import torch
+
+            # 비디오 프레임 로드
+            cap = cv2.VideoCapture(str(video_path))
+            if not cap.isOpened():
+                logger.error(f"Cannot open driving video: {video_path}")
+                return False
+
+            self._driving_video_fps = int(cap.get(cv2.CAP_PROP_FPS)) or 30
+            total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+            logger.info(f"Driving video: {total_frames} frames at {self._driving_video_fps} fps")
+
+            # 모션 추출
+            self._driving_motions = []
+            frame_idx = 0
+
+            while True:
+                ret, frame = cap.read()
+                if not ret:
+                    break
+
+                # BGR → RGB
+                frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+
+                # 256x256으로 리사이즈
+                frame_256 = cv2.resize(frame_rgb, (256, 256))
+
+                # 모션 특징 추출
+                try:
+                    I_d = self._wrapper.prepare_source(frame_256)
+                    x_d_info = self._wrapper.get_kp_info(I_d)
+
+                    # 모션 정보 저장 (텐서를 CPU로 이동하여 저장)
+                    motion_info = {}
+                    for key, value in x_d_info.items():
+                        if isinstance(value, torch.Tensor):
+                            motion_info[key] = value.cpu().clone()
+                        else:
+                            motion_info[key] = value
+
+                    self._driving_motions.append(motion_info)
+                    frame_idx += 1
+
+                    if frame_idx % 30 == 0:
+                        logger.debug(f"Extracted motion from frame {frame_idx}/{total_frames}")
+
+                except Exception as e:
+                    logger.warning(f"Motion extraction failed for frame {frame_idx}: {e}")
+                    continue
+
+            cap.release()
+
+            if len(self._driving_motions) > 0:
+                logger.info(f"✅ Loaded {len(self._driving_motions)} motion frames from driving video")
+                self.driving_video_path = str(video_path)
+                return True
+            else:
+                logger.error("No motion frames extracted from driving video")
+                return False
+
+        except Exception as e:
+            logger.error(f"Failed to load driving video: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
+            return False
+
+    def set_driving_video(self, video_path: str) -> None:
+        """드라이빙 비디오 경로 설정 (초기화 시 로드됨)"""
+        self.driving_video_path = video_path
+        # 이미 초기화되었으면 바로 로드
+        if self._initialized and self._wrapper is not None:
+            asyncio.create_task(self.load_driving_video(video_path))
+
+    def has_driving_video(self) -> bool:
+        """드라이빙 비디오가 로드되어 있는지 확인"""
+        return self._driving_motions is not None and len(self._driving_motions) > 0
+
+    async def _generate_frame_with_driving(
+        self,
+        wrapper_source: Dict[str, Any],
+        driving_frame_idx: int,
+    ) -> np.ndarray:
+        """
+        드라이빙 비디오의 모션을 사용하여 프레임 생성
+
+        Args:
+            wrapper_source: 소스 이미지 특징
+            driving_frame_idx: 드라이빙 프레임 인덱스
+
+        Returns:
+            생성된 프레임
+        """
+        if not self._driving_motions:
+            raise ValueError("No driving motions loaded")
+
+        try:
+            import torch
+
+            f_s = wrapper_source["f_s"]
+            x_s = wrapper_source["x_s"]
+            x_s_info = wrapper_source["x_s_info"]
+            source_256 = wrapper_source["source_256"]
+
+            # 드라이빙 모션 가져오기 (루프)
+            motion_idx = driving_frame_idx % len(self._driving_motions)
+            x_d_info_cpu = self._driving_motions[motion_idx]
+
+            # 디바이스 확인
+            device = x_s_info["pitch"].device if "pitch" in x_s_info else torch.device("cpu")
+            dtype = x_s_info["pitch"].dtype if "pitch" in x_s_info else torch.float32
+
+            # 드라이빙 모션을 GPU로 이동
+            x_d_info = {}
+            for key, value in x_d_info_cpu.items():
+                if isinstance(value, torch.Tensor):
+                    x_d_info[key] = value.to(device=device, dtype=dtype)
+                else:
+                    x_d_info[key] = value
+
+            # 키포인트 변환
+            x_d = self._wrapper.transform_keypoint(x_d_info)
+
+            # warp_decode로 프레임 생성
+            ret_dct = self._wrapper.warp_decode(f_s, x_s, x_d)
+
+            # 결과 파싱
+            out = self._wrapper.parse_output(ret_dct['out'])[0]
+
+            # BGR로 변환
+            output_bgr = cv2.cvtColor(out, cv2.COLOR_RGB2BGR)
+            return output_bgr
+
+        except Exception as e:
+            logger.warning(f"Driving frame generation error: {e}")
+            import traceback
+            logger.warning(traceback.format_exc())
+
+        # 실패 시 원본 반환
+        source_256 = wrapper_source.get("source_256", np.zeros((256, 256, 3), dtype=np.uint8))
+        return cv2.cvtColor(source_256, cv2.COLOR_RGB2BGR)
+
     async def generate_idle_sequence(
         self,
         source_image: np.ndarray,
@@ -440,7 +613,28 @@ class LivePortraitModel:
         # 감정별 모션 프로필
         motion_profile = self._get_emotion_motion_profile(emotion)
 
-        # Wrapper로 프레임 생성 (우선)
+        # 🎬 드라이빙 비디오가 있으면 우선 사용 (최고 품질)
+        if self.has_driving_video() and self._wrapper is not None and "wrapper_source" in features:
+            try:
+                logger.info(f"🎬 Using driving video for idle animation ({len(self._driving_motions)} motion frames)")
+                for frame_idx in range(total_frames):
+                    # 드라이빙 비디오 프레임으로 생성
+                    frame = await self._generate_frame_with_driving(
+                        features["wrapper_source"],
+                        frame_idx
+                    )
+                    frames.append(frame)
+
+                logger.info(f"✅ Generated {len(frames)} frames using driving video")
+                return frames
+
+            except Exception as e:
+                logger.warning(f"Driving video frame generation failed: {e}")
+                import traceback
+                logger.debug(traceback.format_exc())
+                # 수학적 모션으로 fallback
+
+        # Wrapper로 프레임 생성 (수학적 모션)
         if not self._use_fallback and self._wrapper is not None and "wrapper_source" in features:
             try:
                 for frame_idx in range(total_frames):
