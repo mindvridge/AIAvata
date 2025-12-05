@@ -565,13 +565,22 @@ class LivePortraitModel:
             # 2. 표정 적용 (눈 깜빡임, 입 움직임)
             if "exp" in x_d_info and x_d_info["exp"] is not None:
                 exp = x_d_info["exp"].clone()
+                exp_size = exp.shape[1]  # expression 계수 개수 확인
+
                 # 눈 깜빡임 (exp의 처음 몇 개 계수)
                 if blink > 0.1:
-                    exp[0, 0] = blink * 0.5  # 왼쪽 눈
-                    exp[0, 1] = blink * 0.5  # 오른쪽 눈
-                # 입 열림 (exp의 중간 계수)
+                    if exp_size > 0:
+                        exp[0, 0] = blink * 0.5  # 왼쪽 눈
+                    if exp_size > 1:
+                        exp[0, 1] = blink * 0.5  # 오른쪽 눈
+
+                # 입 열림 (LivePortrait exp 크기에 맞게 조정)
+                # exp_size가 21이면 인덱스 14-20 영역 사용
                 if mouth_open > 0:
-                    exp[0, 25] = mouth_open * 0.3
+                    mouth_idx = min(14, exp_size - 1)  # 입 관련 계수 (안전한 인덱스)
+                    if mouth_idx >= 0:
+                        exp[0, mouth_idx] = mouth_open * 0.3
+
                 x_d_info["exp"] = exp
 
             # 새로운 키포인트 계산 (transform_keypoint 사용)
