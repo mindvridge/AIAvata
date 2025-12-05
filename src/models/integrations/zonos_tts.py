@@ -393,13 +393,13 @@ class ZonosTTSModel:
 
         # 텍스트 길이 및 예상 생성 시간 로깅
         text_len = len(text)
-        # 한국어: 약 5자/초, 영어: 약 12자/초 기준 오디오 길이 추정
-        chars_per_sec = 5 if language == "ko" else 12
-        estimated_audio_duration = text_len / chars_per_sec
-        # RTX 4070 Ti 기준 약 25 it/s, 86 tokens/초
-        estimated_tokens = int(86 * estimated_audio_duration * 1.5)  # 1.5배 여유
-        estimated_gen_time = estimated_tokens / 25  # 25 it/s 기준
-        logger.info(f"🎤 TTS 요청: {text_len}자, 예상 오디오≈{estimated_audio_duration:.1f}초, 생성≈{estimated_gen_time:.1f}초")
+        # 한국어: 약 4자/초, 영어: 약 10자/초 (보수적)
+        chars_per_sec = 4 if language == "ko" else 10
+        estimated_audio_duration = min(15.0, max(2.0, (text_len / chars_per_sec) * 1.2))
+        estimated_tokens = int(86 * estimated_audio_duration)
+        # RTX 4070 Ti 기준 약 10 it/s (실측 기반)
+        estimated_gen_time = estimated_tokens / 10
+        logger.info(f"🎤 TTS 요청: {text_len}자 → 최대 {estimated_audio_duration:.1f}초 오디오, 예상 생성≈{estimated_gen_time:.1f}초")
         logger.debug(f"TTS 텍스트 내용: '{text[:100]}{'...' if len(text) > 100 else ''}'")
 
         try:
@@ -428,16 +428,14 @@ class ZonosTTSModel:
 
             # 🚀 텍스트 길이 기반 max_new_tokens 계산 (속도 최적화)
             # Zonos: 86 tokens ≈ 1초 오디오
-            # 한국어: 약 5-6자/초, 영어: 약 12-15자/초
-            chars_per_second = 5 if language == "ko" else 12
+            # 한국어: 약 4자/초 (보수적), 영어: 약 10자/초
+            chars_per_second = 4 if language == "ko" else 10
             estimated_duration = len(text) / chars_per_second
-            # 여유분 추가 (1.5배) + 최소 3초
-            max_duration = max(3.0, estimated_duration * 1.5)
+            # 최소 2초, 최대 15초 (여유분 1.2배)
+            max_duration = min(15.0, max(2.0, estimated_duration * 1.2))
             max_new_tokens = int(86 * max_duration)
-            # 최대 30초로 제한
-            max_new_tokens = min(max_new_tokens, 86 * 30)
 
-            logger.debug(f"TTS 토큰 제한: {max_new_tokens} tokens (예상 {max_duration:.1f}초)")
+            logger.info(f"🎯 TTS 토큰 제한: {max_new_tokens} tokens (최대 {max_duration:.1f}초 오디오)")
 
             # 🎯 무거운 연산을 별도 스레드에서 실행 (이벤트 루프 블로킹 방지)
             # TTS 생성 중에도 idle 루프가 계속 재생될 수 있도록 함
