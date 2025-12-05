@@ -405,7 +405,6 @@ class ZonosTTSModel:
                 return self._generate_mock_audio(len(text))
 
             import torch
-            import time
             from zonos.conditioning import make_cond_dict
 
             # 스피커 임베딩 가져오기
@@ -424,31 +423,42 @@ class ZonosTTSModel:
             }
             zonos_lang = lang_map.get(language, "en-us")
 
-            # 조건부 생성 (Zonos API)
-            cond_dict = make_cond_dict(
-                text=text,
-                speaker=speaker_embedding,
-                language=zonos_lang,
-            )
+            # 🎯 무거운 연산을 별도 스레드에서 실행 (이벤트 루프 블로킹 방지)
+            # TTS 생성 중에도 idle 루프가 계속 재생될 수 있도록 함
+            def _generate_audio():
+                import time as time_module
 
-            # 조건부 준비 및 생성
-            conditioning = self._model.prepare_conditioning(cond_dict)
+                # 조건부 생성 (Zonos API)
+                cond_dict = make_cond_dict(
+                    text=text,
+                    speaker=speaker_embedding,
+                    language=zonos_lang,
+                )
 
-            # 음성 생성
-            gen_start = time.time()
-            with torch.no_grad():
-                codes = self._model.generate(conditioning)
-                gen_time = time.time() - gen_start
-                logger.info(f"🎵 코드 생성 완료: {codes.shape[-1]} tokens, {gen_time:.2f}초 소요")
+                # 조건부 준비
+                conditioning = self._model.prepare_conditioning(cond_dict)
 
-                decode_start = time.time()
-                audio = self._model.autoencoder.decode(codes)
-                decode_time = time.time() - decode_start
-                logger.info(f"🔊 오디오 디코딩 완료: {decode_time:.2f}초 소요")
+                gen_start = time_module.time()
+                with torch.no_grad():
+                    codes = self._model.generate(conditioning)
+                    gen_time = time_module.time() - gen_start
+                    logger.info(f"🎵 코드 생성 완료: {codes.shape[-1]} tokens, {gen_time:.2f}초 소요")
 
-            # numpy 변환
-            if isinstance(audio, torch.Tensor):
-                audio = audio.cpu().numpy()
+                    decode_start = time_module.time()
+                    audio = self._model.autoencoder.decode(codes)
+                    decode_time = time_module.time() - decode_start
+                    logger.info(f"🔊 오디오 디코딩 완료: {decode_time:.2f}초 소요")
+
+                # numpy 변환
+                if isinstance(audio, torch.Tensor):
+                    audio = audio.cpu().numpy()
+
+                total_time = time_module.time() - gen_start
+                return audio, total_time
+
+            # run_in_executor로 비동기 실행 (idle 루프가 계속 실행될 수 있도록)
+            loop = asyncio.get_event_loop()
+            audio, total_time = await loop.run_in_executor(None, _generate_audio)
 
             # 정규화
             if audio.ndim > 1:
@@ -462,7 +472,6 @@ class ZonosTTSModel:
             self.sample_rate = self._model.autoencoder.sampling_rate
             audio_duration = len(audio) / self.sample_rate
 
-            total_time = time.time() - gen_start
             logger.info(f"✅ TTS 완료: {len(audio)} samples ({audio_duration:.2f}초 오디오) @ {self.sample_rate}Hz, 총 {total_time:.2f}초 소요")
             return audio
 
