@@ -524,7 +524,11 @@ class LivePortraitModel:
         driving_frame_idx: int,
     ) -> np.ndarray:
         """
-        드라이빙 비디오의 모션을 사용하여 프레임 생성
+        드라이빙 비디오의 모션을 사용하여 프레임 생성 (상대적 모션 적용)
+
+        LivePortrait 공식 파이프라인의 relative motion 방식:
+        - 소스 이미지의 모션 + (드라이빙 프레임 모션 - 드라이빙 첫 프레임 모션)
+        - 이렇게 하면 소스 이미지의 정체성을 유지하면서 드라이빙 비디오의 움직임만 전달
 
         Args:
             wrapper_source: 소스 이미지 특징
@@ -546,22 +550,58 @@ class LivePortraitModel:
 
             # 드라이빙 모션 가져오기 (루프)
             motion_idx = driving_frame_idx % len(self._driving_motions)
-            x_d_info_cpu = self._driving_motions[motion_idx]
+            x_d_i_info_cpu = self._driving_motions[motion_idx]
+            x_d_0_info_cpu = self._driving_motions[0]  # 첫 프레임 기준
 
             # 디바이스 확인
             device = x_s_info["pitch"].device if "pitch" in x_s_info else torch.device("cpu")
             dtype = x_s_info["pitch"].dtype if "pitch" in x_s_info else torch.float32
 
             # 드라이빙 모션을 GPU로 이동
-            x_d_info = {}
-            for key, value in x_d_info_cpu.items():
-                if isinstance(value, torch.Tensor):
-                    x_d_info[key] = value.to(device=device, dtype=dtype)
-                else:
-                    x_d_info[key] = value
+            def to_device(info_cpu):
+                info = {}
+                for key, value in info_cpu.items():
+                    if isinstance(value, torch.Tensor):
+                        info[key] = value.to(device=device, dtype=dtype)
+                    else:
+                        info[key] = value
+                return info
 
-            # 키포인트 변환
-            x_d = self._wrapper.transform_keypoint(x_d_info)
+            x_d_i_info = to_device(x_d_i_info_cpu)
+            x_d_0_info = to_device(x_d_0_info_cpu)
+
+            # ===== 상대적 모션 계산 (핵심!) =====
+            # 소스 모션 + (현재 드라이빙 프레임 - 첫 드라이빙 프레임)
+            x_d_info_new = {}
+
+            # 1. 회전 (R): R_new = R_d_i @ R_d_0.T @ R_s
+            # pitch, yaw, roll을 사용하여 상대적 회전 계산
+            for key in ['pitch', 'yaw', 'roll']:
+                if key in x_s_info and key in x_d_i_info and key in x_d_0_info:
+                    # 상대적 변화량 계산: source + (driving_i - driving_0)
+                    delta = x_d_i_info[key] - x_d_0_info[key]
+                    x_d_info_new[key] = x_s_info[key] + delta
+
+            # 2. 표정 (exp): exp_new = exp_s + (exp_d_i - exp_d_0)
+            if 'exp' in x_s_info and 'exp' in x_d_i_info and 'exp' in x_d_0_info:
+                delta_exp = x_d_i_info['exp'] - x_d_0_info['exp']
+                x_d_info_new['exp'] = x_s_info['exp'] + delta_exp
+
+            # 3. 나머지 파라미터는 소스 값 사용
+            for key in ['kp', 't', 'scale']:
+                if key in x_s_info:
+                    x_d_info_new[key] = x_s_info[key]
+
+            # 키포인트 변환 (상대적 모션이 적용된 정보 사용)
+            x_d = self._wrapper.transform_keypoint(x_d_info_new)
+
+            # Stitching 적용 (얼굴 경계를 자연스럽게)
+            if hasattr(self._wrapper, 'stitch') and hasattr(self._wrapper, 'stitching_retargeting_module'):
+                try:
+                    x_d_stitched = self._wrapper.stitch(x_s, x_d)
+                    x_d = x_d + x_d_stitched
+                except Exception as e:
+                    logger.debug(f"Stitching skipped: {e}")
 
             # warp_decode로 프레임 생성
             ret_dct = self._wrapper.warp_decode(f_s, x_s, x_d)
