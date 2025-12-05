@@ -393,10 +393,13 @@ class ZonosTTSModel:
 
         # 텍스트 길이 및 예상 생성 시간 로깅
         text_len = len(text)
-        # Zonos는 약 21 tokens/second, 12 it/s 기준 예상 시간
-        estimated_tokens = int(text_len * 2.5)  # 대략적인 추정
-        estimated_seconds = estimated_tokens / 12  # 12 it/s 기준
-        logger.info(f"🎤 TTS 요청: 텍스트 길이={text_len}자, 예상 생성 시간≈{estimated_seconds:.1f}초")
+        # 한국어: 약 5자/초, 영어: 약 12자/초 기준 오디오 길이 추정
+        chars_per_sec = 5 if language == "ko" else 12
+        estimated_audio_duration = text_len / chars_per_sec
+        # RTX 4070 Ti 기준 약 25 it/s, 86 tokens/초
+        estimated_tokens = int(86 * estimated_audio_duration * 1.5)  # 1.5배 여유
+        estimated_gen_time = estimated_tokens / 25  # 25 it/s 기준
+        logger.info(f"🎤 TTS 요청: {text_len}자, 예상 오디오≈{estimated_audio_duration:.1f}초, 생성≈{estimated_gen_time:.1f}초")
         logger.debug(f"TTS 텍스트 내용: '{text[:100]}{'...' if len(text) > 100 else ''}'")
 
         try:
@@ -423,6 +426,19 @@ class ZonosTTSModel:
             }
             zonos_lang = lang_map.get(language, "en-us")
 
+            # 🚀 텍스트 길이 기반 max_new_tokens 계산 (속도 최적화)
+            # Zonos: 86 tokens ≈ 1초 오디오
+            # 한국어: 약 5-6자/초, 영어: 약 12-15자/초
+            chars_per_second = 5 if language == "ko" else 12
+            estimated_duration = len(text) / chars_per_second
+            # 여유분 추가 (1.5배) + 최소 3초
+            max_duration = max(3.0, estimated_duration * 1.5)
+            max_new_tokens = int(86 * max_duration)
+            # 최대 30초로 제한
+            max_new_tokens = min(max_new_tokens, 86 * 30)
+
+            logger.debug(f"TTS 토큰 제한: {max_new_tokens} tokens (예상 {max_duration:.1f}초)")
+
             # 🎯 무거운 연산을 별도 스레드에서 실행 (이벤트 루프 블로킹 방지)
             # TTS 생성 중에도 idle 루프가 계속 재생될 수 있도록 함
             def _generate_audio():
@@ -440,7 +456,11 @@ class ZonosTTSModel:
 
                 gen_start = time_module.time()
                 with torch.no_grad():
-                    codes = self._model.generate(conditioning)
+                    # max_new_tokens로 생성 길이 제한 (속도 향상!)
+                    codes = self._model.generate(
+                        conditioning,
+                        max_new_tokens=max_new_tokens,
+                    )
                     gen_time = time_module.time() - gen_start
                     logger.info(f"🎵 코드 생성 완료: {codes.shape[-1]} tokens, {gen_time:.2f}초 소요")
 
