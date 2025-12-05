@@ -218,6 +218,28 @@ class AvatarRenderer:
         """감정별 idle 루프 영상 로드 또는 생성"""
         self.idle_loops_dir.mkdir(parents=True, exist_ok=True)
 
+        # 🎬 우선순위 1: Pre-rendered idle loop 비디오 직접 로드 (최고 품질)
+        # avata_ani.mp4 → neutral.mp4 심볼릭 링크로 사용
+        prerendered_paths = [
+            self.idle_loops_dir / "neutral.mp4",
+            self.idle_loops_dir / "avata_idle.mp4",
+            Path("assets/avatars/avata_ani.mp4"),
+        ]
+
+        for prerendered_path in prerendered_paths:
+            if prerendered_path.exists():
+                frames = await self._load_video_frames(str(prerendered_path))
+                if frames:
+                    # Pre-rendered 영상을 모든 감정에 공유 (기본)
+                    self._idle_loops[Emotion.NEUTRAL] = frames
+                    self._idle_loops[Emotion.HAPPY] = frames
+                    self._idle_loops[Emotion.SAD] = frames
+                    self._idle_loops[Emotion.LISTENING] = frames
+                    logger.info(f"✅ Loaded pre-rendered idle loop: {prerendered_path} ({len(frames)} frames)")
+                    logger.info(f"   Resolution: {self.output_width}x{self.output_height}, FPS target: {self.target_fps}")
+                    return  # Pre-rendered 영상 로드 성공, 완료
+
+        # 🎬 우선순위 2: 감정별 개별 idle loop 영상
         for emotion in Emotion:
             filename = EmotionMapping.get_idle_loop_filename(emotion)
             filepath = self.idle_loops_dir / filename
@@ -230,7 +252,7 @@ class AvatarRenderer:
                     logger.info(f"Loaded idle loop: {filename} ({len(frames)} frames)")
                     continue
 
-            # LivePortrait로 idle 루프 생성 시도
+            # LivePortrait로 idle 루프 생성 시도 (품질이 낮을 수 있음)
             if self._live_portrait_model and self._source_image is not None:
                 frames = await self._generate_idle_loop_with_live_portrait(emotion)
                 if frames:
