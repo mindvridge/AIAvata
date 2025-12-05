@@ -546,8 +546,9 @@ class AvatarWebSocketHandler:
                     logger.info(f"Connection {connection_id} closed, stopping idle stream")
                     break
 
-                # 처리 중 상태로 변경되면 idle 프레임 건너뛰기
-                if state_machine.is_busy():
+                # SPEAKING 상태일 때만 프레임 전송 건너뛰기
+                # (TTS 생성 중에는 idle 루프 계속 재생)
+                if state_machine.state == ConnectionState.SPEAKING:
                     continue
 
                 try:
@@ -645,8 +646,8 @@ class AvatarWebSocketHandler:
         state_machine: ConnectionStateMachine = connection["state_machine"]
         logger.info(f"Chat message received: {text[:50]}...")
 
-        # PROCESSING 상태로 전이
-        state_machine.transition_to(ConnectionState.PROCESSING)
+        # 🎬 idle 루프는 계속 재생 - TTS/립싱크 준비 완료까지 PROCESSING 전이 안 함
+        # _process_chat_with_tts에서 프레임 준비 완료 후 SPEAKING으로 전이
 
         # 세션 가져오기
         session = None
@@ -744,20 +745,8 @@ class AvatarWebSocketHandler:
         state_machine: ConnectionStateMachine = connection["state_machine"]
         logger.debug(f"Processing TTS for response: '{response_text[:50]}...'")
 
-        # idle 스트림 중지 (채팅 처리 시작 전)
-        if connection.get("idle_task"):
-            idle_task = connection["idle_task"]
-            if idle_task and not idle_task.done():
-                logger.debug("Stopping idle stream for chat processing")
-                idle_task.cancel()
-                try:
-                    await asyncio.wait_for(idle_task, timeout=1.0)
-                except (asyncio.CancelledError, asyncio.TimeoutError):
-                    pass
-                connection["idle_task"] = None
-
-        # SPEAKING 상태로 전이
-        state_machine.transition_to(ConnectionState.SPEAKING)
+        # 🎬 idle 스트림은 TTS/립싱크 준비 완료까지 계속 재생
+        # 립싱크 프레임이 모두 준비된 후에만 idle을 중지하고 SPEAKING으로 전이
 
         try:
 
@@ -817,6 +806,31 @@ class AvatarWebSocketHandler:
             if connection_id not in self._active_connections:
                 logger.warning("Connection closed during lip sync generation")
                 return
+
+            # ===== 🎬 루프 끝까지 대기 후 자연스럽게 전환 =====
+            logger.info("🎬 Waiting for idle loop to complete for smooth transition...")
+
+            # 루프 끝 대기 (최대 5초, avata_ani.mp4는 5초 루프)
+            loop_completed = await self.pipeline.renderer.wait_for_loop_end(timeout=5.5)
+            if loop_completed:
+                logger.info("✅ Idle loop completed, transitioning to speaking")
+            else:
+                logger.info("⚠️ Loop wait timeout, proceeding with transition")
+
+            # idle 스트림 중지
+            if connection.get("idle_task"):
+                idle_task = connection["idle_task"]
+                if idle_task and not idle_task.done():
+                    logger.debug("Stopping idle stream for speaking")
+                    idle_task.cancel()
+                    try:
+                        await asyncio.wait_for(idle_task, timeout=0.5)
+                    except (asyncio.CancelledError, asyncio.TimeoutError):
+                        pass
+                    connection["idle_task"] = None
+
+            # SPEAKING 상태로 전이
+            state_machine.transition_to(ConnectionState.SPEAKING)
 
             # ===== 오디오와 비디오를 동기화하여 전송 =====
             import base64

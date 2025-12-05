@@ -77,6 +77,9 @@ class AvatarRenderer:
         self._idle_loops: Dict[Emotion, List[np.ndarray]] = {}
         self._current_emotion = Emotion.NEUTRAL
         self._current_frame_idx = 0
+        self._loop_length = 0  # 현재 루프의 총 프레임 수
+        self._waiting_for_loop_end = False  # 루프 끝 대기 플래그
+        self._loop_end_event: Optional[asyncio.Event] = None  # 루프 끝 이벤트
 
         # 모델 인스턴스
         self._musetalk_model: Optional[MuseTalkModel] = None
@@ -420,6 +423,48 @@ class AvatarRenderer:
             self._musetalk_model.reset_audio_buffer()
             logger.debug("MuseTalk audio buffer reset")
 
+    def get_loop_progress(self) -> tuple[int, int]:
+        """
+        현재 루프 진행 상태 반환
+
+        Returns:
+            (현재 프레임 인덱스, 총 프레임 수)
+        """
+        return (self._current_frame_idx % max(1, self._loop_length), self._loop_length)
+
+    def is_at_loop_start(self) -> bool:
+        """루프 시작 지점인지 확인 (자연스러운 전환 포인트)"""
+        if self._loop_length == 0:
+            return True
+        return (self._current_frame_idx % self._loop_length) == 0
+
+    async def wait_for_loop_end(self, timeout: float = 5.0) -> bool:
+        """
+        현재 루프가 끝날 때까지 대기
+
+        Args:
+            timeout: 최대 대기 시간 (초)
+
+        Returns:
+            루프 완료 여부 (timeout 시 False)
+        """
+        if self._loop_length == 0:
+            return True
+
+        # 이벤트 생성 및 대기 플래그 설정
+        self._loop_end_event = asyncio.Event()
+        self._waiting_for_loop_end = True
+
+        try:
+            await asyncio.wait_for(self._loop_end_event.wait(), timeout=timeout)
+            return True
+        except asyncio.TimeoutError:
+            logger.warning(f"Loop end wait timeout ({timeout}s)")
+            return False
+        finally:
+            self._waiting_for_loop_end = False
+            self._loop_end_event = None
+
     def get_idle_frame(self) -> np.ndarray:
         """
         현재 감정의 idle 루프에서 다음 프레임 반환
@@ -459,6 +504,8 @@ class AvatarRenderer:
                 return frame
 
         frames = self._idle_loops[emotion]
+        self._loop_length = len(frames)  # 루프 길이 업데이트
+
         if len(frames) == 0:
             logger.warning(f"Empty idle loop for emotion: {emotion}")
             # 빈 프레임 리스트면 기본 프레임 반환
@@ -467,9 +514,19 @@ class AvatarRenderer:
                 128,
                 dtype=np.uint8,
             )
-        
-        frame = frames[self._current_frame_idx % len(frames)]
+
+        # 현재 프레임 인덱스 (루프 내)
+        frame_idx_in_loop = self._current_frame_idx % len(frames)
+        frame = frames[frame_idx_in_loop]
         self._current_frame_idx += 1
+
+        # 루프 끝에 도달했고, 대기 중이면 이벤트 발생
+        if self._waiting_for_loop_end and self._loop_end_event:
+            # 다음 프레임이 루프 시작점이면 (현재가 마지막 프레임)
+            next_idx = self._current_frame_idx % len(frames)
+            if next_idx == 0:
+                logger.debug(f"Loop end reached at frame {frame_idx_in_loop}")
+                self._loop_end_event.set()
 
         return frame.copy()
 
