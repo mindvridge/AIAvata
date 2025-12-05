@@ -308,6 +308,70 @@ class TTSModule:
 
         return 0
 
+    async def synthesize_sentences_streaming(
+        self,
+        text: str,
+        voice_id: Optional[str] = None,
+        language: str = "ko",
+    ) -> AsyncGenerator[tuple, None]:
+        """
+        실시간 문장 단위 TTS 스트리밍
+
+        문장별로 TTS를 생성하여 즉시 반환합니다.
+        첫 문장 생성이 완료되면 바로 재생을 시작할 수 있어
+        첫 응답 지연시간을 크게 줄일 수 있습니다.
+
+        Args:
+            text: 변환할 전체 텍스트
+            voice_id: 사용할 음성 프로필 ID
+            language: 언어 코드
+
+        Yields:
+            (audio_array, sentence_text, sentence_index, total_sentences) 튜플
+            - audio_array: 해당 문장의 오디오 데이터 (numpy array)
+            - sentence_text: 원본 문장 텍스트
+            - sentence_index: 현재 문장 인덱스 (0부터)
+            - total_sentences: 전체 문장 수
+        """
+        self._ensure_initialized()
+
+        if not text.strip():
+            return
+
+        use_voice_id = voice_id or self.voice_id
+
+        if self._zonos_model is None:
+            logger.warning("Zonos model not loaded, using mock streaming")
+            # 폴백: 단일 문장으로 처리
+            audio = self._generate_mock_audio(len(text))
+            yield (audio, text, 0, 1)
+            return
+
+        try:
+            # ZonosTTSModel의 문장 스트리밍 메서드 호출
+            async for audio, sentence, idx, total in self._zonos_model.synthesize_sentences_streaming(
+                text=text,
+                voice_id=use_voice_id,
+                language=language,
+            ):
+                # 리샘플링 필요 시 적용
+                if audio is not None and len(audio) > 0:
+                    if self._zonos_model.sample_rate != self.sample_rate:
+                        import librosa
+                        audio = librosa.resample(
+                            audio,
+                            orig_sr=self._zonos_model.sample_rate,
+                            target_sr=self.sample_rate,
+                        )
+
+                yield (audio, sentence, idx, total)
+
+        except Exception as e:
+            logger.error(f"Sentence streaming error: {e}", exc_info=True)
+            # 폴백: 전체 텍스트를 단일 문장으로 처리
+            audio = await self.synthesize(text, voice_id)
+            yield (audio, text, 0, 1)
+
     def _split_into_sentences(self, text: str) -> list:
         """텍스트를 문장 단위로 분리"""
         sentences = _SENTENCE_SPLIT_PATTERN.split(text)

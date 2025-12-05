@@ -515,6 +515,113 @@ class ZonosTTSModel:
             yield audio[i:i + chunk_size]
             await asyncio.sleep(0.01)  # 약간의 지연
 
+    def _split_into_sentences(self, text: str, language: str = "ko") -> List[str]:
+        """
+        텍스트를 문장 단위로 분할
+
+        Args:
+            text: 분할할 텍스트
+            language: 언어 코드
+
+        Returns:
+            문장 리스트
+        """
+        import re
+
+        if not text.strip():
+            return []
+
+        # 한국어/일본어/중국어: 마침표, 물음표, 느낌표로 분할
+        if language in ["ko", "ja", "zh"]:
+            # 문장 끝 패턴: 마침표, 물음표, 느낌표 + 공백 또는 끝
+            sentences = re.split(r'(?<=[.?!。？！])\s*', text)
+        else:
+            # 영어 등: 마침표, 물음표, 느낌표 뒤 공백으로 분할
+            sentences = re.split(r'(?<=[.?!])\s+', text)
+
+        # 빈 문장 제거 및 정리
+        sentences = [s.strip() for s in sentences if s.strip()]
+
+        # 너무 짧은 문장은 다음 문장과 합치기 (최소 10자)
+        merged = []
+        buffer = ""
+        for s in sentences:
+            if buffer:
+                buffer = buffer + " " + s
+            else:
+                buffer = s
+
+            if len(buffer) >= 10 or s == sentences[-1]:
+                merged.append(buffer)
+                buffer = ""
+
+        if buffer:
+            merged.append(buffer)
+
+        logger.debug(f"Split text into {len(merged)} sentences: {[s[:20]+'...' for s in merged]}")
+        return merged
+
+    async def synthesize_sentences_streaming(
+        self,
+        text: str,
+        voice_id: Optional[str] = None,
+        language: str = "en",
+    ) -> AsyncGenerator[tuple[np.ndarray, str, int, int], None]:
+        """
+        실시간 문장 단위 TTS 스트리밍
+
+        문장별로 TTS를 생성하여 즉시 반환합니다.
+        첫 문장 생성이 완료되면 바로 재생을 시작할 수 있어
+        첫 응답 지연시간을 크게 줄일 수 있습니다.
+
+        Args:
+            text: 변환할 전체 텍스트
+            voice_id: 사용할 음성 프로필 ID
+            language: 언어 코드
+
+        Yields:
+            (audio_array, sentence_text, sentence_index, total_sentences) 튜플
+            - audio_array: 해당 문장의 오디오 데이터 (numpy array)
+            - sentence_text: 원본 문장 텍스트
+            - sentence_index: 현재 문장 인덱스 (0부터)
+            - total_sentences: 전체 문장 수
+        """
+        if not self._initialized:
+            await self.initialize()
+
+        if not text.strip():
+            return
+
+        # 문장 분할
+        sentences = self._split_into_sentences(text, language)
+        total = len(sentences)
+
+        if total == 0:
+            return
+
+        logger.info(f"🎙️ 실시간 TTS 스트리밍 시작: {total}개 문장")
+
+        for idx, sentence in enumerate(sentences):
+            start_time = asyncio.get_event_loop().time()
+
+            # 개별 문장 TTS 생성
+            audio = await self.synthesize(
+                text=sentence,
+                voice_id=voice_id,
+                language=language,
+            )
+
+            elapsed = asyncio.get_event_loop().time() - start_time
+            audio_duration = len(audio) / self.sample_rate if len(audio) > 0 else 0
+
+            logger.info(
+                f"🎵 문장 {idx+1}/{total} TTS 완료: "
+                f"'{sentence[:30]}...' → {audio_duration:.1f}초 오디오, "
+                f"{elapsed:.1f}초 소요"
+            )
+
+            yield (audio, sentence, idx, total)
+
     def _generate_mock_audio(self, text_length: int) -> np.ndarray:
         """테스트용 mock 오디오 생성"""
         duration_samples = int(text_length * 0.1 * self.sample_rate)
