@@ -175,3 +175,8 @@ frontend/.next/
 
 # Redis dump
 dump.rdb
+
+# Large binary files
+tools/ffmpeg/
+*.exe
+*.whl
