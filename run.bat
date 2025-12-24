@@ -21,15 +21,21 @@ echo [0/10] 환경 정리 중...
 REM Set pip timeout to prevent network errors (default 15 -> 120 seconds)
 set PIP_DEFAULT_TIMEOUT=120
 
-REM Get site-packages path
+REM Get site-packages path (check multiple Python installations)
 for /f "tokens=*" %%i in ('python -c "import site; print(site.getsitepackages()[0])" 2^>nul') do set SITE_PACKAGES=%%i
+
+REM Also check Python 3.10 path (common installation location)
+set PYTHON310_PATH=C:\Users\pc\AppData\Local\Programs\Python\Python310\Lib\site-packages
 
 REM Clean up ALL corrupted/temp folders (more aggressive cleanup)
 if defined SITE_PACKAGES (
     echo       손상된 패키지 정리 중...
 
     REM Remove corrupted -umpy folder
-    if exist "%SITE_PACKAGES%\-umpy" rmdir /s /q "%SITE_PACKAGES%\-umpy" 2>nul
+    if exist "%SITE_PACKAGES%\-umpy" (
+        echo       삭제: -umpy
+        rmdir /s /q "%SITE_PACKAGES%\-umpy" 2>nul
+    )
 
     REM Remove any temp folders starting with ~ or -
     for /d %%d in ("%SITE_PACKAGES%\~*") do (
@@ -43,6 +49,14 @@ if defined SITE_PACKAGES (
 
     REM Remove .dist-info for corrupted packages
     for /d %%d in ("%SITE_PACKAGES%\~*.dist-info") do rmdir /s /q "%%d" 2>nul
+)
+
+REM Also clean Python 3.10 path if it exists
+if exist "%PYTHON310_PATH%\-umpy" (
+    echo       Python 3.10 경로 정리 중...
+    rmdir /s /q "%PYTHON310_PATH%\-umpy" 2>nul
+    for /d %%d in ("%PYTHON310_PATH%\~*") do rmdir /s /q "%%d" 2>nul
+    for /d %%d in ("%PYTHON310_PATH%\-*") do rmdir /s /q "%%d" 2>nul
 )
 
 REM Upgrade pip to avoid old version issues
@@ -454,10 +468,10 @@ if errorlevel 1 (
 
     REM Install mmcv, mmdet, mmpose (MuseTalk required dependencies)
     pip install openmim -q
-    mim install mmengine -q
-    mim install "mmcv>=2.0.0" -q
-    mim install "mmdet>=3.0.0" -q
-    mim install "mmpose>=1.0.0" -q
+    python -m mim install mmengine -q
+    python -m mim install "mmcv>=2.0.0" -q
+    python -m mim install "mmdet>=3.0.0" -q
+    python -m mim install "mmpose>=1.0.0" -q
 
     REM Check and install CMake for dlib build
     cmake --version >nul 2>&1
