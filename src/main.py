@@ -156,6 +156,8 @@ async def root():
             "generate_token": "POST /api/generate-token",
             "list_avatars": "GET /api/avatars",
             "list_emotions": "GET /api/emotions",
+            "get_session_emotion": "GET /api/avatar/{session_id}/emotion",
+            "analyze_emotion": "POST /api/analyze-emotion",
             "metrics": "GET /api/metrics",
             "voices": "GET /api/voices",
             "voice_management": "POST /api/voices",

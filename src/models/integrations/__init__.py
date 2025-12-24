@@ -12,10 +12,12 @@ from .musetalk import MuseTalkModel
 from .live_portrait import LivePortraitModel
 from .chatterbox_tts import ChatterboxTTSModel
 from .zonos_tts import ZonosTTSModel
+from .elevenlabs_tts import ElevenLabsTTSModel
 
 __all__ = [
     "MuseTalkModel",
     "LivePortraitModel",
     "ChatterboxTTSModel",
     "ZonosTTSModel",
+    "ElevenLabsTTSModel",
 ]

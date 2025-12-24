@@ -6,10 +6,13 @@ REST API 엔드포인트 정의
 
 import logging
 import time
+import io
 from typing import Optional
 from uuid import UUID
 
-from fastapi import APIRouter, HTTPException, Depends
+import numpy as np
+
+from fastapi import APIRouter, HTTPException, Depends, UploadFile, File, Form
 
 from ..config import Settings, get_settings
 from ..models.schemas import (
@@ -287,3 +290,121 @@ async def list_emotions():
     return {
         "emotions": [e.value for e in Emotion],
     }
+
+
+@router.get("/api/avatar/{session_id}/emotion", tags=["Avatar"])
+async def get_session_emotion(
+    session_id: str,
+    pipeline=Depends(get_pipeline),
+):
+    """
+    세션의 현재 감정 분석 결과 조회
+
+    Args:
+        session_id: 세션 ID
+
+    Returns:
+        감정 분석 결과
+    """
+    try:
+        uuid = UUID(session_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid session ID format")
+
+    session = pipeline.get_session(uuid)
+    if session is None:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    return {
+        "session_id": str(session.session_id),
+        "current_emotion": session.current_emotion.value,
+        "pipeline_state": session.pipeline_state.value,
+    }
+
+
+@router.post("/api/analyze-emotion", tags=["Avatar"])
+async def analyze_emotion_from_audio(
+    audio_file: UploadFile = File(..., description="음성 파일 (WAV/MP3 형식)"),
+    sample_rate: int = Form(default=16000, description="샘플 레이트 (기본값: 16000)"),
+    pipeline=Depends(get_pipeline),
+):
+    """
+    업로드된 음성 파일에서 감정 분석
+
+    Request Body (multipart/form-data):
+        - audio_file: 음성 파일 (WAV/MP3 형식)
+        - sample_rate: 샘플 레이트 (선택, 기본값: 16000)
+
+    Returns:
+        감정 분석 결과 (텍스트, 감정, 언어, 신뢰도)
+    """
+    try:
+        import soundfile as sf
+    except ImportError:
+        raise HTTPException(
+            status_code=503,
+            detail="soundfile library is required for audio analysis. Please install it: pip install soundfile"
+        )
+
+    try:
+        # 파일 읽기
+        audio_bytes = await audio_file.read()
+        
+        # 오디오 디코딩
+        try:
+            # soundfile으로 오디오 로드
+            audio_data, sr = sf.read(io.BytesIO(audio_bytes))
+            
+            # 모노로 변환 (스테레오인 경우)
+            if len(audio_data.shape) > 1:
+                audio_data = np.mean(audio_data, axis=1)
+            
+            # 샘플 레이트 변환 (필요한 경우)
+            if sr != sample_rate:
+                try:
+                    from scipy import signal
+                    num_samples = int(len(audio_data) * sample_rate / sr)
+                    audio_data = signal.resample(audio_data, num_samples)
+                except ImportError:
+                    # scipy가 없으면 간단한 리샘플링 (품질 저하 가능)
+                    logger.warning("scipy not available, using simple resampling")
+                    import math
+                    indices = np.linspace(0, len(audio_data) - 1, int(len(audio_data) * sample_rate / sr))
+                    audio_data = np.interp(indices, np.arange(len(audio_data)), audio_data)
+            
+            # 정규화
+            if audio_data.dtype != np.float32:
+                audio_data = audio_data.astype(np.float32)
+            if np.max(np.abs(audio_data)) > 1.0:
+                audio_data = audio_data / np.max(np.abs(audio_data))
+            
+        except Exception as e:
+            logger.error(f"Failed to decode audio file: {e}")
+            raise HTTPException(
+                status_code=400,
+                detail=f"Failed to decode audio file: {str(e)}"
+            )
+
+        # STT 모듈로 감정 분석
+        stt_result = await pipeline.stt.transcribe(
+            audio=audio_data,
+            sample_rate=sample_rate,
+            language="auto",
+        )
+
+        return {
+            "text": stt_result.text,
+            "emotion": stt_result.emotion.value,
+            "language": stt_result.language,
+            "confidence": stt_result.confidence,
+            "processing_time_ms": stt_result.processing_time_ms,
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to analyze emotion: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to analyze emotion: {str(e)}"
+        )

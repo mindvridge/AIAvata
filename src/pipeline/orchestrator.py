@@ -72,6 +72,10 @@ class PipelineOrchestrator:
             sample_rate=settings.tts_sample_rate,
             device=settings.get_device(),
             enable_compile=getattr(settings, 'tts_enable_compile', False),
+            # ElevenLabs 설정
+            elevenlabs_api_key=getattr(settings, 'elevenlabs_api_key', None),
+            elevenlabs_voice_id=getattr(settings, 'elevenlabs_voice_id', None),
+            elevenlabs_model_id=getattr(settings, 'elevenlabs_model_id', None),
         )
 
         self.renderer = AvatarRenderer(

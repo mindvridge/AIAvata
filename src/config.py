@@ -91,12 +91,36 @@ class Settings(BaseSettings):
         description="Use fast lip sync simulation instead of MuseTalk (faster but lower quality)"
     )
 
+    # Idle Loop Settings
+    idle_loop_cache_enabled: bool = Field(
+        default=True,
+        description="Enable frame caching for idle loop videos (faster but uses more memory)"
+    )
+    idle_loop_cache_max_frames: int = Field(
+        default=300,
+        description="Maximum number of frames to cache (300 frames = ~10 seconds @ 30fps)"
+    )
+    idle_loop_cache_max_duration_seconds: float = Field(
+        default=10.0,
+        description="Maximum video duration to cache in seconds (videos longer than this will stream from file)"
+    )
+
     # TTS Settings
-    tts_provider: Literal["zonos"] = Field(
-        default="zonos", description="TTS provider (zonos for voice cloning)"
+    tts_provider: Literal["zonos", "elevenlabs"] = Field(
+        default="zonos", description="TTS provider (zonos for voice cloning, elevenlabs for API)"
     )
     tts_voice: str = Field(
-        default="default", description="TTS voice ID (Zonos voice profile ID)"
+        default="default", description="TTS voice ID (Zonos voice profile ID or ElevenLabs voice ID)"
+    )
+    # ElevenLabs Settings
+    elevenlabs_api_key: str = Field(
+        default="", description="ElevenLabs API key"
+    )
+    elevenlabs_voice_id: str = Field(
+        default="21m00Tcm4TlvDq8ikWAM", description="ElevenLabs voice ID (default: Rachel)"
+    )
+    elevenlabs_model_id: str = Field(
+        default="eleven_multilingual_v2", description="ElevenLabs model ID (multilingual v2 supports Korean)"
     )
     tts_sample_rate: int = Field(default=24000, description="TTS audio sample rate")
     tts_chunk_size: int = Field(

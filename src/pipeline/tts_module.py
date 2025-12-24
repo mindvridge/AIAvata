@@ -1,11 +1,12 @@
 """
-TTS Module with Zonos TTS support.
+TTS Module with Zonos and ElevenLabs TTS support.
 
-Zonos TTS 음성 복제 모듈
-- zonos: 고품질 음성 복제 TTS (다국어, 한국어 포함)
+TTS 음성 합성 모듈
+- zonos: 고품질 음성 복제 TTS (다국어, 한국어 포함, 로컬 실행)
+- elevenlabs: ElevenLabs API 기반 고품질 TTS (다국어, 한국어 포함, 클라우드)
 
 특징:
-- 200ms 미만 지연시간
+- 200ms 미만 지연시간 (Zonos)
 - 스트리밍 출력 지원
 - 한국어/영어 자동 선택
 """
@@ -13,7 +14,7 @@ Zonos TTS 음성 복제 모듈
 import asyncio
 import logging
 import re
-from typing import AsyncGenerator, Optional, Literal
+from typing import AsyncGenerator, Optional, Literal, Union
 
 import numpy as np
 
@@ -28,35 +29,43 @@ _SENTENCE_END_PATTERN = re.compile(r"[.!?。！？]")
 
 class TTSModule:
     """
-    Zonos TTS 모듈
+    TTS 모듈 (Zonos 및 ElevenLabs 지원)
 
     Features:
     - 텍스트 → 음성 변환
     - 스트리밍 출력
-    - zonos: 고품질 음성 복제 (다국어, 한국어 포함)
+    - zonos: 고품질 음성 복제 (다국어, 한국어 포함, 로컬 실행)
+    - elevenlabs: ElevenLabs API 기반 고품질 TTS (다국어, 한국어 포함, 클라우드)
     """
 
     def __init__(
         self,
-        provider: Literal["zonos"] = "zonos",
+        provider: Literal["zonos", "elevenlabs"] = "zonos",
         voice: str = "default",
         voice_sample_path: Optional[str] = None,
         sample_rate: int = 24000,
         device: str = "cuda",
         voice_id: str = "default",
         enable_compile: bool = False,
+        # ElevenLabs 설정
+        elevenlabs_api_key: Optional[str] = None,
+        elevenlabs_voice_id: Optional[str] = None,
+        elevenlabs_model_id: Optional[str] = None,
     ):
         """
         Initialize TTS Module.
 
         Args:
-            provider: TTS 프로바이더 ("zonos")
+            provider: TTS 프로바이더 ("zonos" 또는 "elevenlabs")
             voice: 음성 ID
-            voice_sample_path: 음성 클로닝용 참조 오디오 경로
+            voice_sample_path: 음성 클로닝용 참조 오디오 경로 (Zonos용)
             sample_rate: 출력 샘플레이트
-            device: Compute device
+            device: Compute device (Zonos용)
             voice_id: 음성 ID
-            enable_compile: torch.compile() 활성화 (Linux only)
+            enable_compile: torch.compile() 활성화 (Linux only, Zonos용)
+            elevenlabs_api_key: ElevenLabs API 키
+            elevenlabs_voice_id: ElevenLabs 음성 ID
+            elevenlabs_model_id: ElevenLabs 모델 ID
         """
         self.provider = provider
         self.voice = voice
@@ -66,13 +75,19 @@ class TTSModule:
         self.voice_id = voice_id
         self.enable_compile = enable_compile
 
+        # ElevenLabs 설정
+        self.elevenlabs_api_key = elevenlabs_api_key
+        self.elevenlabs_voice_id = elevenlabs_voice_id
+        self.elevenlabs_model_id = elevenlabs_model_id
+
         # torch.compile() 설정 (ZonosTTS import 전에 환경변수 설정 필요)
         import os
-        if enable_compile:
+        if enable_compile and provider == "zonos":
             os.environ["ZONOS_ENABLE_COMPILE"] = "1"
             logger.info("🚀 torch.compile() 활성화됨 (TTS 속도 향상)")
 
         self._zonos_model = None
+        self._elevenlabs_model = None
         self._initialized = False
 
         logger.info(f"TTS Module created: provider={provider}, voice={voice}")
@@ -82,26 +97,57 @@ class TTSModule:
         if self._initialized:
             return
 
-        logger.info("Initializing Zonos TTS model...")
-        try:
-            from ..models.integrations import ZonosTTSModel
+        if self.provider == "zonos":
+            logger.info("Initializing Zonos TTS model...")
+            try:
+                from ..models.integrations import ZonosTTSModel
 
-            self._zonos_model = ZonosTTSModel(
-                device=self.device,
-                sample_rate=44100,  # Zonos uses 44.1kHz
-            )
+                self._zonos_model = ZonosTTSModel(
+                    device=self.device,
+                    sample_rate=44100,  # Zonos uses 44.1kHz
+                )
 
-            success = await self._zonos_model.initialize()
+                success = await self._zonos_model.initialize()
 
-            if not success:
-                logger.warning("Zonos TTS initialization returned False, using fallback")
+                if not success:
+                    logger.warning("Zonos TTS initialization returned False, using fallback")
 
-            self._initialized = True
-            logger.info("Zonos TTS model initialized successfully")
+                self._initialized = True
+                logger.info("Zonos TTS model initialized successfully")
 
-        except Exception as e:
-            logger.error(f"Failed to initialize Zonos TTS: {e}")
-            self._initialized = True  # 폴백 모드
+            except Exception as e:
+                logger.error(f"Failed to initialize Zonos TTS: {e}")
+                self._initialized = True  # 폴백 모드
+
+        elif self.provider == "elevenlabs":
+            logger.info("Initializing ElevenLabs TTS model...")
+            try:
+                from ..models.integrations import ElevenLabsTTSModel
+
+                if not self.elevenlabs_api_key:
+                    raise ValueError("ElevenLabs API key is required")
+
+                self._elevenlabs_model = ElevenLabsTTSModel(
+                    api_key=self.elevenlabs_api_key,
+                    voice_id=self.elevenlabs_voice_id or self.voice_id,
+                    model_id=self.elevenlabs_model_id or "eleven_multilingual_v2",
+                    sample_rate=self.sample_rate,
+                )
+
+                success = await self._elevenlabs_model.initialize()
+
+                if not success:
+                    logger.warning("ElevenLabs TTS initialization returned False, using fallback")
+
+                self._initialized = True
+                logger.info("ElevenLabs TTS model initialized successfully")
+
+            except Exception as e:
+                logger.error(f"Failed to initialize ElevenLabs TTS: {e}")
+                self._initialized = True  # 폴백 모드
+
+        else:
+            raise ValueError(f"Unknown TTS provider: {self.provider}")
 
     def _ensure_initialized(self) -> None:
         """초기화 확인"""
@@ -128,7 +174,12 @@ class TTSModule:
         if not text.strip():
             return np.array([], dtype=np.float32)
 
-        return await self._synthesize_zonos(text, voice_id)
+        if self.provider == "zonos":
+            return await self._synthesize_zonos(text, voice_id)
+        elif self.provider == "elevenlabs":
+            return await self._synthesize_elevenlabs(text, voice_id)
+        else:
+            raise ValueError(f"Unknown TTS provider: {self.provider}")
 
     async def _synthesize_zonos(self, text: str, voice_id: Optional[str] = None) -> np.ndarray:
         """Zonos TTS로 음성 합성"""
@@ -163,6 +214,34 @@ class TTSModule:
 
         except Exception as e:
             logger.error(f"Zonos TTS synthesis error: {e}", exc_info=True)
+            logger.warning(f"Falling back to mock audio for text: '{text[:50]}...'")
+            return self._generate_mock_audio(len(text))
+
+    async def _synthesize_elevenlabs(self, text: str, voice_id: Optional[str] = None) -> np.ndarray:
+        """ElevenLabs TTS로 음성 합성"""
+        use_voice_id = voice_id or self.voice_id
+
+        if self._elevenlabs_model is None:
+            logger.warning(f"ElevenLabs model not loaded, using mock audio for text: '{text[:50]}...'")
+            return self._generate_mock_audio(len(text))
+
+        try:
+            logger.debug(f"Calling ElevenLabs TTS synthesize: text='{text[:50]}...', voice_id={use_voice_id}")
+            audio = await self._elevenlabs_model.synthesize(
+                text=text,
+                voice_id=use_voice_id,
+                language="ko",  # 한국어 기본값
+            )
+
+            if audio is not None and len(audio) > 0:
+                logger.debug(f"ElevenLabs TTS synthesize completed: {len(audio)} samples")
+            else:
+                logger.warning("ElevenLabs TTS synthesize returned empty audio")
+
+            return audio
+
+        except Exception as e:
+            logger.error(f"ElevenLabs TTS synthesis error: {e}", exc_info=True)
             logger.warning(f"Falling back to mock audio for text: '{text[:50]}...'")
             return self._generate_mock_audio(len(text))
 
@@ -340,37 +419,63 @@ class TTSModule:
 
         use_voice_id = voice_id or self.voice_id
 
-        if self._zonos_model is None:
-            logger.warning("Zonos model not loaded, using mock streaming")
-            # 폴백: 단일 문장으로 처리
-            audio = self._generate_mock_audio(len(text))
-            yield (audio, text, 0, 1)
-            return
+        if self.provider == "zonos":
+            if self._zonos_model is None:
+                logger.warning("Zonos model not loaded, using mock streaming")
+                # 폴백: 단일 문장으로 처리
+                audio = self._generate_mock_audio(len(text))
+                yield (audio, text, 0, 1)
+                return
 
-        try:
-            # ZonosTTSModel의 문장 스트리밍 메서드 호출
-            async for audio, sentence, idx, total in self._zonos_model.synthesize_sentences_streaming(
-                text=text,
-                voice_id=use_voice_id,
-                language=language,
-            ):
-                # 리샘플링 필요 시 적용
-                if audio is not None and len(audio) > 0:
-                    if self._zonos_model.sample_rate != self.sample_rate:
-                        import librosa
-                        audio = librosa.resample(
-                            audio,
-                            orig_sr=self._zonos_model.sample_rate,
-                            target_sr=self.sample_rate,
-                        )
+            try:
+                # ZonosTTSModel의 문장 스트리밍 메서드 호출
+                async for audio, sentence, idx, total in self._zonos_model.synthesize_sentences_streaming(
+                    text=text,
+                    voice_id=use_voice_id,
+                    language=language,
+                ):
+                    # 리샘플링 필요 시 적용
+                    if audio is not None and len(audio) > 0:
+                        if self._zonos_model.sample_rate != self.sample_rate:
+                            import librosa
+                            audio = librosa.resample(
+                                audio,
+                                orig_sr=self._zonos_model.sample_rate,
+                                target_sr=self.sample_rate,
+                            )
 
-                yield (audio, sentence, idx, total)
+                    yield (audio, sentence, idx, total)
 
-        except Exception as e:
-            logger.error(f"Sentence streaming error: {e}", exc_info=True)
-            # 폴백: 전체 텍스트를 단일 문장으로 처리
-            audio = await self.synthesize(text, voice_id)
-            yield (audio, text, 0, 1)
+            except Exception as e:
+                logger.error(f"Sentence streaming error: {e}", exc_info=True)
+                # 폴백: 전체 텍스트를 단일 문장으로 처리
+                audio = await self.synthesize(text, voice_id)
+                yield (audio, text, 0, 1)
+
+        elif self.provider == "elevenlabs":
+            if self._elevenlabs_model is None:
+                logger.warning("ElevenLabs model not loaded, using mock streaming")
+                # 폴백: 단일 문장으로 처리
+                audio = self._generate_mock_audio(len(text))
+                yield (audio, text, 0, 1)
+                return
+
+            try:
+                # ElevenLabsTTSModel의 문장 스트리밍 메서드 호출
+                async for audio, sentence, idx, total in self._elevenlabs_model.synthesize_sentences_streaming(
+                    text=text,
+                    voice_id=use_voice_id,
+                    language=language,
+                ):
+                    yield (audio, sentence, idx, total)
+
+            except Exception as e:
+                logger.error(f"Sentence streaming error: {e}", exc_info=True)
+                # 폴백: 전체 텍스트를 단일 문장으로 처리
+                audio = await self.synthesize(text, voice_id)
+                yield (audio, text, 0, 1)
+        else:
+            raise ValueError(f"Unknown TTS provider: {self.provider}")
 
     def _split_into_sentences(self, text: str) -> list:
         """텍스트를 문장 단위로 분리"""
@@ -424,5 +529,8 @@ class TTSModule:
         if self._zonos_model is not None:
             await self._zonos_model.cleanup()
             self._zonos_model = None
+        if self._elevenlabs_model is not None:
+            await self._elevenlabs_model.cleanup()
+            self._elevenlabs_model = None
         self._initialized = False
         logger.info("TTS module cleaned up")

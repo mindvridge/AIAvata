@@ -463,9 +463,15 @@ class ZonosTTSModel:
                     logger.info(f"🎵 코드 생성 완료: {codes.shape[-1]} tokens, {gen_time:.2f}초 소요")
 
                     decode_start = time_module.time()
-                    audio = self._model.autoencoder.decode(codes)
-                    decode_time = time_module.time() - decode_start
-                    logger.info(f"🔊 오디오 디코딩 완료: {decode_time:.2f}초 소요")
+                    try:
+                        logger.info(f"🔊 오디오 디코딩 시작: codes shape={codes.shape}")
+                        audio = self._model.autoencoder.decode(codes)
+                        decode_time = time_module.time() - decode_start
+                        logger.info(f"🔊 오디오 디코딩 완료: {decode_time:.2f}초 소요, audio shape={audio.shape if hasattr(audio, 'shape') else 'unknown'}")
+                    except Exception as decode_error:
+                        decode_time = time_module.time() - decode_start
+                        logger.error(f"❌ 오디오 디코딩 실패: {decode_error} (소요 시간: {decode_time:.2f}초)", exc_info=True)
+                        raise
 
                 # numpy 변환
                 if isinstance(audio, torch.Tensor):
@@ -476,7 +482,27 @@ class ZonosTTSModel:
 
             # run_in_executor로 비동기 실행 (idle 루프가 계속 실행될 수 있도록)
             loop = asyncio.get_event_loop()
-            audio, total_time = await loop.run_in_executor(None, _generate_audio)
+            try:
+                # GPU 메모리 확인 (CUDA 사용 시)
+                try:
+                    import torch
+                    if torch.cuda.is_available():
+                        gpu_memory_allocated = torch.cuda.memory_allocated() / 1024**3  # GB
+                        gpu_memory_reserved = torch.cuda.memory_reserved() / 1024**3  # GB
+                        logger.info(f"💾 GPU 메모리 상태: 할당={gpu_memory_allocated:.2f}GB, 예약={gpu_memory_reserved:.2f}GB")
+                except ImportError:
+                    pass  # torch가 없으면 무시
+                
+                audio, total_time = await asyncio.wait_for(
+                    loop.run_in_executor(None, _generate_audio),
+                    timeout=300.0  # 5분 타임아웃
+                )
+            except asyncio.TimeoutError:
+                logger.error("❌ TTS 생성 타임아웃 (5분 초과)")
+                raise Exception("TTS generation timeout")
+            except Exception as e:
+                logger.error(f"❌ TTS 생성 중 오류: {e}", exc_info=True)
+                raise
 
             # 정규화
             if audio.ndim > 1:

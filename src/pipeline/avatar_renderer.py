@@ -75,6 +75,14 @@ class AvatarRenderer:
 
         # 상태
         self._idle_loops: Dict[Emotion, List[np.ndarray]] = {}
+        # 비디오 파일 직접 스트리밍용 (메모리 효율적)
+        self._idle_video_paths: Dict[Emotion, Optional[Path]] = {}
+        # 프레임 캐싱 설정
+        self._cache_enabled = getattr(settings, 'idle_loop_cache_enabled', True) if settings else True
+        self._cache_max_frames = getattr(settings, 'idle_loop_cache_max_frames', 300) if settings else 300
+        self._cache_max_duration = getattr(settings, 'idle_loop_cache_max_duration_seconds', 10.0) if settings else 10.0
+        # 캐시된 비디오 정보 (비디오가 캐시되었는지 여부)
+        self._cached_videos: Dict[Emotion, bool] = {}
         self._current_emotion = Emotion.NEUTRAL
         self._current_frame_idx = 0
         self._loop_length = 0  # 현재 루프의 총 프레임 수
@@ -231,29 +239,88 @@ class AvatarRenderer:
 
         for prerendered_path in prerendered_paths:
             if prerendered_path.exists():
-                frames = await self._load_video_frames(str(prerendered_path))
-                if frames:
-                    # Pre-rendered 영상을 모든 감정에 공유 (기본)
-                    self._idle_loops[Emotion.NEUTRAL] = frames
-                    self._idle_loops[Emotion.HAPPY] = frames
-                    self._idle_loops[Emotion.SAD] = frames
-                    self._idle_loops[Emotion.LISTENING] = frames
-                    logger.info(f"✅ Loaded pre-rendered idle loop: {prerendered_path} ({len(frames)} frames)")
+                video_path = Path(prerendered_path)
+                
+                # 비디오 정보 확인 (프레임 수, 길이)
+                video_info = await self._get_video_info(str(video_path))
+                total_frames = video_info.get("total_frames", 0)
+                duration = video_info.get("duration", 0.0)
+                fps = video_info.get("fps", self.target_fps)
+                
+                # 캐싱 여부 결정
+                should_cache = (
+                    self._cache_enabled and
+                    total_frames > 0 and
+                    total_frames <= self._cache_max_frames and
+                    duration <= self._cache_max_duration
+                )
+                
+                if should_cache:
+                    # 🎬 프레임 캐싱 모드: 짧은 비디오는 메모리에 로드
+                    logger.info(f"✅ Pre-rendered idle loop 등록: {prerendered_path}")
+                    logger.info(f"   프레임 캐싱 모드: {total_frames} 프레임 ({duration:.1f}초) → 메모리 로드")
+                    
+                    frames = await self._load_video_frames(str(prerendered_path))
+                    if frames:
+                        self._idle_loops[Emotion.NEUTRAL] = frames
+                        self._idle_loops[Emotion.HAPPY] = frames
+                        self._idle_loops[Emotion.SAD] = frames
+                        self._idle_loops[Emotion.LISTENING] = frames
+                        self._cached_videos[Emotion.NEUTRAL] = True
+                        self._cached_videos[Emotion.HAPPY] = True
+                        self._cached_videos[Emotion.SAD] = True
+                        self._cached_videos[Emotion.LISTENING] = True
+                        logger.info(f"   ✅ {len(frames)} 프레임 메모리 캐시 완료")
+                        logger.info(f"   Resolution: {self.output_width}x{self.output_height}, FPS target: {self.target_fps}")
+                else:
+                    # 🎬 파일 스트리밍 모드: 긴 비디오는 파일에서 직접 읽기
+                    self._idle_video_paths[Emotion.NEUTRAL] = video_path
+                    self._idle_video_paths[Emotion.HAPPY] = video_path
+                    self._idle_video_paths[Emotion.SAD] = video_path
+                    self._idle_video_paths[Emotion.LISTENING] = video_path
+                    self._cached_videos[Emotion.NEUTRAL] = False
+                    self._cached_videos[Emotion.HAPPY] = False
+                    self._cached_videos[Emotion.SAD] = False
+                    self._cached_videos[Emotion.LISTENING] = False
+                    logger.info(f"✅ Pre-rendered idle loop 등록: {prerendered_path}")
+                    logger.info(f"   파일 스트리밍 모드: {total_frames} 프레임 ({duration:.1f}초) → 파일에서 직접 읽기")
                     logger.info(f"   Resolution: {self.output_width}x{self.output_height}, FPS target: {self.target_fps}")
-                    return  # Pre-rendered 영상 로드 성공, 완료
+                
+                return  # Pre-rendered 영상 등록 완료
 
         # 🎬 우선순위 2: 감정별 개별 idle loop 영상
         for emotion in Emotion:
             filename = EmotionMapping.get_idle_loop_filename(emotion)
             filepath = self.idle_loops_dir / filename
 
-            # 기존 루프 파일이 있으면 로드
+            # 기존 루프 파일이 있으면 캐싱 여부 결정
             if filepath.exists():
-                frames = await self._load_video_frames(str(filepath))
-                if frames:
-                    self._idle_loops[emotion] = frames
-                    logger.info(f"Loaded idle loop: {filename} ({len(frames)} frames)")
-                    continue
+                # 비디오 정보 확인
+                video_info = await self._get_video_info(str(filepath))
+                total_frames = video_info.get("total_frames", 0)
+                duration = video_info.get("duration", 0.0)
+                
+                # 캐싱 여부 결정
+                should_cache = (
+                    self._cache_enabled and
+                    total_frames > 0 and
+                    total_frames <= self._cache_max_frames and
+                    duration <= self._cache_max_duration
+                )
+                
+                if should_cache:
+                    # 프레임 캐싱
+                    frames = await self._load_video_frames(str(filepath))
+                    if frames:
+                        self._idle_loops[emotion] = frames
+                        self._cached_videos[emotion] = True
+                        logger.info(f"✅ Idle loop 등록: {filename} (프레임 캐싱: {len(frames)} 프레임)")
+                else:
+                    # 파일 스트리밍
+                    self._idle_video_paths[emotion] = filepath
+                    self._cached_videos[emotion] = False
+                    logger.info(f"✅ Idle loop 등록: {filename} (파일 스트리밍: {total_frames} 프레임)")
+                continue
 
             # LivePortrait로 idle 루프 생성 시도 (품질이 낮을 수 있음)
             if self._live_portrait_model and self._source_image is not None:
@@ -297,12 +364,35 @@ class AvatarRenderer:
             logger.error(f"Failed to generate idle loop for {emotion.value}: {e}")
             return None
 
+    async def _get_video_info(self, video_path: str) -> Dict[str, Any]:
+        """비디오 파일 정보 가져오기"""
+        def get_info():
+            cap = cv2.VideoCapture(video_path)
+            if not cap.isOpened():
+                return {"total_frames": 0, "fps": 0, "duration": 0.0}
+            
+            total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+            fps = cap.get(cv2.CAP_PROP_FPS) or self.target_fps
+            duration = total_frames / fps if fps > 0 else 0.0
+            
+            cap.release()
+            return {
+                "total_frames": total_frames,
+                "fps": fps,
+                "duration": duration,
+            }
+        
+        return await asyncio.get_event_loop().run_in_executor(None, get_info)
+
     async def _load_video_frames(self, video_path: str) -> List[np.ndarray]:
-        """비디오 파일을 프레임 리스트로 로드"""
+        """비디오 파일을 프레임 리스트로 로드 (캐싱용)"""
         frames = []
 
         def load_sync():
             cap = cv2.VideoCapture(video_path)
+            if not cap.isOpened():
+                return []
+            
             while True:
                 ret, frame = cap.read()
                 if not ret:
@@ -535,7 +625,10 @@ class AvatarRenderer:
         duration: float = -1,
     ) -> AsyncGenerator[VideoFrame, None]:
         """
-        Idle 루프 프레임 스트리밍
+        Idle 루프 프레임 스트리밍 (하이브리드: 캐시 또는 파일 스트리밍)
+
+        짧은 비디오는 메모리에 캐시된 프레임을 사용하고,
+        긴 비디오는 파일에서 직접 스트리밍합니다.
 
         Args:
             duration: 스트리밍 지속 시간 (초). -1이면 무한
@@ -545,6 +638,132 @@ class AvatarRenderer:
         """
         self._ensure_initialized()
 
+        emotion = self._current_emotion
+        
+        # 🎬 우선순위 1: 캐시된 프레임 사용 (가장 빠름)
+        if emotion in self._idle_loops and len(self._idle_loops[emotion]) > 0:
+            logger.debug(f"캐시된 프레임 사용: {emotion.value} ({len(self._idle_loops[emotion])} 프레임)")
+            async for frame in self._render_idle_stream_from_memory(duration):
+                yield frame
+            return
+        
+        # 🎬 우선순위 2: 파일 스트리밍
+        video_path = self._idle_video_paths.get(emotion)
+        if video_path is not None and video_path.exists():
+            async for frame in self._render_idle_stream_from_file(video_path, duration):
+                yield frame
+            return
+        
+        # 🎬 우선순위 3: Fallback (메모리 프레임)
+        logger.debug(f"비디오 파일 없음, 메모리 프레임 방식 사용: {emotion.value}")
+        async for frame in self._render_idle_stream_from_memory(duration):
+            yield frame
+
+    async def _render_idle_stream_from_file(
+        self,
+        video_path: Path,
+        duration: float = -1,
+    ) -> AsyncGenerator[VideoFrame, None]:
+        """
+        파일에서 직접 스트리밍 (긴 비디오용)
+        """
+
+        logger.debug(f"🎬 파일 스트리밍 시작: {video_path}")
+        
+        start_time = time.time()
+        frame_index = 0
+        cap = None
+
+        try:
+            # 비디오 캡처 열기
+            def open_video():
+                cap = cv2.VideoCapture(str(video_path))
+                if not cap.isOpened():
+                    raise ValueError(f"비디오 파일을 열 수 없습니다: {video_path}")
+                return cap
+
+            cap = await asyncio.get_event_loop().run_in_executor(None, open_video)
+            
+            # 비디오 정보 가져오기
+            fps = cap.get(cv2.CAP_PROP_FPS) or self.target_fps
+            total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+            logger.debug(f"   파일 스트리밍: {total_frames} 프레임, {fps:.2f} FPS")
+
+            frame_duration = 1.0 / self.target_fps
+            loop_count = 0
+
+            while True:
+                frame_start = time.time()
+
+                # 프레임 읽기
+                def read_frame():
+                    ret, frame = cap.read()
+                    if not ret:
+                        # 비디오 끝에 도달하면 처음으로 돌아가기 (루프)
+                        cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+                        ret, frame = cap.read()
+                        if ret:
+                            loop_count += 1
+                            if loop_count % 10 == 0:
+                                logger.debug(f"비디오 루프 #{loop_count}")
+                    return ret, frame
+
+                ret, frame = await asyncio.get_event_loop().run_in_executor(None, read_frame)
+                
+                if not ret:
+                    logger.warning("비디오 프레임을 읽을 수 없습니다")
+                    break
+
+                # 크기 조정
+                if frame.shape[1] != self.output_width or frame.shape[0] != self.output_height:
+                    frame = cv2.resize(frame, (self.output_width, self.output_height))
+
+                # JPEG 인코딩
+                _, encoded = cv2.imencode(
+                    ".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 85]
+                )
+
+                yield VideoFrame(
+                    data=encoded.tobytes(),
+                    width=self.output_width,
+                    height=self.output_height,
+                    timestamp=time.time(),
+                    frame_index=frame_index,
+                    encoding="jpeg",
+                )
+
+                frame_index += 1
+
+                # 프레임 레이트 조절
+                elapsed = time.time() - frame_start
+                sleep_time = frame_duration - elapsed
+                if sleep_time > 0:
+                    await asyncio.sleep(sleep_time)
+
+                # 지속 시간 체크
+                if duration > 0 and (time.time() - start_time) >= duration:
+                    break
+
+        except Exception as e:
+            logger.error(f"비디오 스트리밍 오류: {e}", exc_info=True)
+            # 오류 발생 시 메모리 프레임 방식으로 fallback
+            logger.info("메모리 프레임 방식으로 fallback")
+            async for frame in self._render_idle_stream_from_memory(duration):
+                yield frame
+
+        finally:
+            if cap is not None:
+                def close_video():
+                    cap.release()
+                await asyncio.get_event_loop().run_in_executor(None, close_video)
+
+    async def _render_idle_stream_from_memory(
+        self,
+        duration: float = -1,
+    ) -> AsyncGenerator[VideoFrame, None]:
+        """
+        메모리에 로드된 프레임으로 idle 스트리밍 (fallback)
+        """
         start_time = time.time()
         frame_index = 0
 
