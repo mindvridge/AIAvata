@@ -18,6 +18,14 @@ from typing import AsyncGenerator, Optional, Literal, Union
 
 import numpy as np
 
+# 리샘플링용 librosa (모듈 레벨 import로 성능 최적화)
+try:
+    import librosa
+    _LIBROSA_AVAILABLE = True
+except ImportError:
+    _LIBROSA_AVAILABLE = False
+    librosa = None
+
 from ..models.schemas import TTSChunk
 
 logger = logging.getLogger(__name__)
@@ -198,14 +206,16 @@ class TTSModule:
             )
 
             if audio is not None and len(audio) > 0:
-                # Resample from 44.1kHz to target sample rate if needed
+                # Resample from 44.1kHz to target sample rate if needed (모듈 레벨 librosa 사용)
                 if self._zonos_model.sample_rate != self.sample_rate:
-                    import librosa
-                    audio = librosa.resample(
-                        audio,
-                        orig_sr=self._zonos_model.sample_rate,
-                        target_sr=self.sample_rate,
-                    )
+                    if _LIBROSA_AVAILABLE:
+                        audio = librosa.resample(
+                            audio,
+                            orig_sr=self._zonos_model.sample_rate,
+                            target_sr=self.sample_rate,
+                        )
+                    else:
+                        logger.warning("librosa not available, skipping resampling")
                 logger.debug(f"Zonos TTS synthesize completed: {len(audio)} samples")
             else:
                 logger.warning("Zonos TTS synthesize returned empty audio")
@@ -434,15 +444,17 @@ class TTSModule:
                     voice_id=use_voice_id,
                     language=language,
                 ):
-                    # 리샘플링 필요 시 적용
+                    # 리샘플링 필요 시 적용 (모듈 레벨 librosa 사용)
                     if audio is not None and len(audio) > 0:
                         if self._zonos_model.sample_rate != self.sample_rate:
-                            import librosa
-                            audio = librosa.resample(
-                                audio,
-                                orig_sr=self._zonos_model.sample_rate,
-                                target_sr=self.sample_rate,
-                            )
+                            if _LIBROSA_AVAILABLE:
+                                audio = librosa.resample(
+                                    audio,
+                                    orig_sr=self._zonos_model.sample_rate,
+                                    target_sr=self.sample_rate,
+                                )
+                            else:
+                                logger.warning("librosa not available, skipping resampling")
 
                     yield (audio, sentence, idx, total)
 

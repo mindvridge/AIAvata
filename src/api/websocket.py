@@ -623,6 +623,28 @@ class AvatarWebSocketHandler:
                 if not state_machine.is_busy():
                     state_machine.transition_to(ConnectionState.CONNECTED, force=True)
 
+    def _detect_language(self, text: str) -> str:
+        """
+        텍스트에서 언어 감지 (간단한 휴리스틱)
+
+        Args:
+            text: 분석할 텍스트
+
+        Returns:
+            언어 코드 (ko, en, ja, zh)
+        """
+        # 한글 포함 여부
+        if any('\uac00' <= c <= '\ud7a3' for c in text):
+            return "ko"
+        # 일본어 히라가나/가타카나 포함 여부
+        if any('\u3040' <= c <= '\u30ff' for c in text):
+            return "ja"
+        # 중국어 간체/번체 포함 여부 (한글 제외)
+        if any('\u4e00' <= c <= '\u9fff' for c in text):
+            return "zh"
+        # 기본값: 영어
+        return "en"
+
     async def _handle_chat(
         self,
         websocket: WebSocket,
@@ -693,11 +715,18 @@ class AvatarWebSocketHandler:
                 })
                 logger.debug(f"Added assistant response to history: {response_text[:50]}...")
 
+            # 언어 감지 (응답 텍스트 기준)
+            detected_language = self._detect_language(response_text)
+            logger.debug(f"Detected language: {detected_language}")
+
             # TTS로 음성 생성 및 립싱크 아바타 렌더링
             # 텍스트와 오디오를 동시에 전송하여 동기화
             logger.info("🎤 Starting TTS and lip sync processing for chat response...")
             try:
-                await self._process_chat_with_tts(websocket, response_text, session_id, text)
+                await self._process_chat_with_tts(
+                    websocket, response_text, session_id, text,
+                    language=detected_language
+                )
                 logger.info("✅ TTS and lip sync processing completed successfully")
             except Exception as e:
                 logger.error(f"❌ TTS/Lipsync processing failed: {e}", exc_info=True)
@@ -716,12 +745,33 @@ class AvatarWebSocketHandler:
                 "user_message": text,
             })
 
+    @staticmethod
+    def _make_audio_stream_generator(audio_bytes: bytes, chunk_size: int):
+        """
+        오디오 스트림 제너레이터 팩토리 함수 (클로저 버그 방지)
+
+        Args:
+            audio_bytes: 오디오 바이트 데이터
+            chunk_size: 청크 크기
+
+        Returns:
+            비동기 제너레이터 함수
+        """
+        async def generator():
+            offset = 0
+            while offset < len(audio_bytes):
+                chunk = audio_bytes[offset:offset + chunk_size]
+                yield chunk
+                offset += chunk_size
+        return generator
+
     async def _process_chat_with_tts(
         self,
         websocket: WebSocket,
         response_text: str,
         session_id: Optional[UUID],
         user_message: str = "",
+        language: str = "ko",
     ):
         """
         실시간 TTS 스트리밍으로 음성 생성 및 립싱크 비디오 전송
@@ -734,6 +784,7 @@ class AvatarWebSocketHandler:
             response_text: LLM 응답 텍스트
             session_id: 세션 ID
             user_message: 사용자 원본 메시지
+            language: 언어 코드 (ko, en, ja, zh)
         """
         import base64
 
@@ -745,7 +796,7 @@ class AvatarWebSocketHandler:
             return
 
         state_machine: ConnectionStateMachine = connection["state_machine"]
-        logger.info(f"🎙️ 실시간 TTS 스트리밍 시작: '{response_text[:50]}...'")
+        logger.info(f"🎙️ 실시간 TTS 스트리밍 시작: '{response_text[:50]}...' (lang={language})")
 
         # 텍스트 응답 먼저 전송 (UI 업데이트용)
         await self._send_json(websocket, {
@@ -760,13 +811,15 @@ class AvatarWebSocketHandler:
         total_frames_sent = 0
         target_fps = self.pipeline.settings.target_fps
         frame_duration = 1.0 / target_fps
+        chunk_size = self.pipeline.settings.tts_chunk_size
+        failed_sentences = []
 
         try:
             # 문장별 실시간 TTS 스트리밍
             async for audio_np, sentence, idx, total in self.pipeline.tts.synthesize_sentences_streaming(
                 text=response_text,
                 voice_id=None,
-                language="ko",  # 기본 한국어
+                language=language,
             ):
                 # 연결 확인
                 if connection_id not in self._active_connections:
@@ -775,29 +828,39 @@ class AvatarWebSocketHandler:
 
                 if audio_np is None or len(audio_np) == 0:
                     logger.warning(f"Empty audio for sentence {idx+1}")
+                    failed_sentences.append(idx + 1)
+                    # 클라이언트에 에러 알림
+                    await self._send_json(websocket, {
+                        "type": "sentence_error",
+                        "sentence_index": idx,
+                        "total_sentences": total,
+                        "error": "Empty audio generated",
+                    })
                     continue
 
                 # numpy array를 bytes로 변환 (16-bit PCM)
                 audio_bytes = self.pipeline.tts._audio_to_bytes(audio_np)
 
-                # 립싱크 프레임 생성
-                async def audio_stream_generator():
-                    chunk_size = self.pipeline.settings.tts_chunk_size
-                    offset = 0
-                    while offset < len(audio_bytes):
-                        chunk = audio_bytes[offset:offset + chunk_size]
-                        yield chunk
-                        offset += chunk_size
+                # 립싱크 프레임 생성 (팩토리 함수로 클로저 버그 방지)
+                audio_generator = self._make_audio_stream_generator(audio_bytes, chunk_size)
 
                 video_frames = []
                 try:
                     async for frame in self.pipeline.renderer.render_with_audio(
-                        audio_stream=audio_stream_generator(),
+                        audio_stream=audio_generator(),
                         audio_sample_rate=self.pipeline.tts.sample_rate,
                     ):
                         video_frames.append(frame.data)
                 except Exception as e:
                     logger.error(f"Error generating lip sync for sentence {idx+1}: {e}")
+                    failed_sentences.append(idx + 1)
+                    # 클라이언트에 에러 알림
+                    await self._send_json(websocket, {
+                        "type": "sentence_error",
+                        "sentence_index": idx,
+                        "total_sentences": total,
+                        "error": f"Lip sync generation failed: {str(e)[:100]}",
+                    })
                     continue
 
                 logger.info(f"🎬 문장 {idx+1}/{total} 립싱크 완료: {len(video_frames)} 프레임")
@@ -861,7 +924,10 @@ class AvatarWebSocketHandler:
                     if sleep_time > 0:
                         await asyncio.sleep(sleep_time)
 
-                logger.info(f"✅ 문장 {idx+1}/{total} 완료 ({len(video_frames)} 프레임)")
+                # 프레임 메모리 즉시 해제
+                video_frames.clear()
+
+                logger.info(f"✅ 문장 {idx+1}/{total} 완료")
 
             logger.info(f"✅ 실시간 TTS 스트리밍 완료: 총 {total_frames_sent} 프레임 전송")
 
@@ -869,6 +935,7 @@ class AvatarWebSocketHandler:
             await self._send_json(websocket, {
                 "type": "streaming_complete",
                 "total_frames": total_frames_sent,
+                "failed_sentences": failed_sentences if failed_sentences else None,
             })
 
             # 립싱크 완료 후 CONNECTED 상태로 전이 및 idle 스트림 재시작
@@ -887,6 +954,11 @@ class AvatarWebSocketHandler:
         except Exception as e:
             logger.error(f"TTS/Lipsync streaming error: {e}", exc_info=True)
             state_machine.transition_to(ConnectionState.ERROR)
+            # 클라이언트에 에러 알림
+            await self._send_json(websocket, {
+                "type": "streaming_error",
+                "error": str(e)[:200],
+            })
 
         finally:
             if connection_id in self._active_connections:
