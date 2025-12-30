@@ -567,8 +567,8 @@ class MuseTalkModel:
             
             # 리사이즈 시도
             try:
-                # VAE 출력을 256x256으로 리사이즈 (LANCZOS4로 선명하게)
-                result_256 = cv2.resize(output_np, (256, 256), interpolation=cv2.INTER_LANCZOS4)
+                # VAE 출력을 256x256으로 리사이즈 (CUBIC - 아티팩트 최소화)
+                result_256 = cv2.resize(output_np, (256, 256), interpolation=cv2.INTER_CUBIC)
                 source_256 = face_crop.copy()
 
                 # VAE 출력과 원본의 차이 로깅
@@ -647,10 +647,10 @@ class MuseTalkModel:
                             face_large = body_pil.crop(crop_box)
                             ori_shape = face_large.size
                             
-                            logger.debug(f"Face Parser 입력: size={ori_shape}, mode=lip")
+                            logger.debug(f"Face Parser 입력: size={ori_shape}, mode=jaw")
 
-                            # Face Parser로 마스크 생성 (mode="lip" 사용 - 더 정밀한 입 마스크)
-                            seg_image = self._face_parser(face_large, mode="lip")
+                            # Face Parser로 마스크 생성 (mode="jaw" - 공식 MuseTalk 설정)
+                            seg_image = self._face_parser(face_large, mode="jaw")
                             
                             if seg_image is not None:
                                 logger.info(f"🔍 Face Parser 출력: type={type(seg_image).__name__}, size={seg_image.size if hasattr(seg_image, 'size') else 'N/A'}")
@@ -666,19 +666,24 @@ class MuseTalkModel:
                                 mask_image = Image.new('L', ori_shape, 0)
                                 mask_image.paste(mask_small, (x1 - crop_x1, y1 - crop_y1))
                                 
-                                # 🔑 상단 60% 제거 (입만 정확하게 마스킹)
-                                # 0.5 → 0.6으로 변경하여 입 영역만 더 정확하게
+                                # 🔑 상단 50% 제거 (공식 MuseTalk upper_boundary_ratio=0.5)
                                 width, height = mask_image.size
-                                top_boundary = int(height * 0.6)
+                                top_boundary = int(height * 0.5)
                                 modified_mask = Image.new('L', ori_shape, 0)
                                 modified_mask.paste(
                                     mask_image.crop((0, top_boundary, width, height)),
                                     (0, top_boundary)
                                 )
-                                
-                                # 🔑 블러 제거 - 선명한 립싱크를 위해
-                                # Gaussian blur가 입 영역을 흐리게 만들어 제거
-                                mask_array = np.array(modified_mask)
+
+                                # 🔑 최소 블러 적용 (경계선 부드럽게, 0.03 계수 - 공식 0.05보다 낮게)
+                                # FaceFusion 권장: 경계선 선명하게 하려면 blur를 낮춤
+                                blur_kernel_size = int(0.03 * ori_shape[0] // 2 * 2) + 1
+                                if blur_kernel_size < 3:
+                                    blur_kernel_size = 3
+                                mask_array = cv2.GaussianBlur(
+                                    np.array(modified_mask),
+                                    (blur_kernel_size, blur_kernel_size), 0
+                                )
                                 
                                 # 🔑 마스크 최대값 제한 (더 선명한 블렌딩)
                                 # 180 → 200으로 증가하여 더 확실한 블렌딩
@@ -690,7 +695,7 @@ class MuseTalkModel:
                                     face_parser_error_reason = f"마스크 픽셀 부족 ({valid_pixels}개)"
                                     mask_array = None
                                 else:
-                                    logger.info(f"✅ Face Parser 성공: pixels={valid_pixels}, max={np.max(mask_array):.0f}")
+                                    logger.info(f"✅ Face Parser 성공: blur={blur_kernel_size}, pixels={valid_pixels}, max={np.max(mask_array):.0f}")
                             else:
                                 face_parser_error_reason = "Face Parser가 None 반환"
                                 logger.error("❌ Face Parser가 None 반환!")
@@ -770,8 +775,11 @@ class MuseTalkModel:
                                     intensity = int(200 * (1.0 - dist * 0.5))  # 최대 200
                                     mask_array[y, x] = max(mask_array[y, x], intensity)
                         
-                        # 🔑 블러 제거 - 선명한 립싱크를 위해
-                        # Gaussian blur가 입 영역을 흐리게 만들어 제거
+                        # 🔑 최소 블러 적용 (경계선 부드럽게)
+                        blur_kernel_size = int(0.03 * ori_shape[0] // 2 * 2) + 1
+                        if blur_kernel_size < 3:
+                            blur_kernel_size = 3
+                        mask_array = cv2.GaussianBlur(mask_array, (blur_kernel_size, blur_kernel_size), 0)
 
                         # 🔑 마스크 최대값 증가 (더 선명한 블렌딩)
                         mask_array = np.clip(mask_array, 0, 200)
@@ -779,8 +787,8 @@ class MuseTalkModel:
                     # =====================================================
                     # MuseTalk get_image_blending 방식으로 블렌딩
                     # =====================================================
-                    # VAE 출력을 원본 얼굴 크기로 리사이즈 (LANCZOS4로 선명하게)
-                    result_face = cv2.resize(result_256, (x2 - x1, y2 - y1), interpolation=cv2.INTER_LANCZOS4)
+                    # VAE 출력을 원본 얼굴 크기로 리사이즈 (CUBIC - 아티팩트 최소화)
+                    result_face = cv2.resize(result_256, (x2 - x1, y2 - y1), interpolation=cv2.INTER_CUBIC)
                     result_face_pil = Image.fromarray(result_face[:, :, ::-1])
                     
                     # face_large에 result_face 붙이기
@@ -808,7 +816,7 @@ class MuseTalkModel:
                 # 얼굴 bbox가 없는 경우 (폴백) - 전체 프레임에 VAE 출력 적용
                 else:
                     logger.error("❌ face_bbox가 None - 얼굴 감지 실패! 전체 프레임에 VAE 적용")
-                    result_frame = cv2.resize(result_256, (w, h), interpolation=cv2.INTER_LANCZOS4)
+                    result_frame = cv2.resize(result_256, (w, h), interpolation=cv2.INTER_CUBIC)
 
                     if result_frame is not None and result_frame.shape[:2] == (h, w):
                         logger.info(f"✅ MuseTalk lip sync SUCCESS: output shape={result_frame.shape}")
