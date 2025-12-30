@@ -685,9 +685,9 @@ class MuseTalkModel:
                                     (blur_kernel_size, blur_kernel_size), 0
                                 )
                                 
-                                # 🔑 마스크 최대값 제한 (더 선명한 블렌딩)
-                                # 180 → 200으로 증가하여 더 확실한 블렌딩
-                                mask_array = np.clip(mask_array, 0, 200)
+                                # 🔑 마스크 최대값 255 (완전 불투명)
+                                # 중앙 영역은 VAE 결과를 그대로 사용
+                                mask_array = np.clip(mask_array, 0, 255)
                                 
                                 # 마스크 유효 픽셀 수 확인
                                 valid_pixels = np.sum(mask_array > 0)
@@ -781,14 +781,21 @@ class MuseTalkModel:
                             blur_kernel_size = 3
                         mask_array = cv2.GaussianBlur(mask_array, (blur_kernel_size, blur_kernel_size), 0)
 
-                        # 🔑 마스크 최대값 증가 (더 선명한 블렌딩)
-                        mask_array = np.clip(mask_array, 0, 200)
+                        # 🔑 마스크 최대값 255 (완전 불투명)
+                        mask_array = np.clip(mask_array, 0, 255)
                     
                     # =====================================================
                     # MuseTalk get_image_blending 방식으로 블렌딩
                     # =====================================================
                     # VAE 출력을 원본 얼굴 크기로 리사이즈 (CUBIC - 아티팩트 최소화)
                     result_face = cv2.resize(result_256, (x2 - x1, y2 - y1), interpolation=cv2.INTER_CUBIC)
+
+                    # 🔑 Unsharp Mask 샤프닝 적용 (VAE 출력 선명화)
+                    # VAE 디코더의 흐릿한 출력을 보완
+                    gaussian = cv2.GaussianBlur(result_face, (0, 0), 2.0)
+                    result_face = cv2.addWeighted(result_face, 1.5, gaussian, -0.5, 0)
+                    result_face = np.clip(result_face, 0, 255).astype(np.uint8)
+
                     result_face_pil = Image.fromarray(result_face[:, :, ::-1])
                     
                     # face_large에 result_face 붙이기
