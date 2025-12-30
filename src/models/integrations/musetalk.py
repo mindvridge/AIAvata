@@ -66,7 +66,6 @@ class MuseTalkModel:
         self._positional_encoding = None  # PositionalEncoding for audio features
         self._whisper = None  # Whisper encoder 모델
         self._weight_dtype = None  # 모델 dtype (float16/float32)
-        self._gfpgan = None  # GFPGAN for face restoration
 
         # 오디오 버퍼 (실시간 처리용)
         self._audio_buffer: List[np.ndarray] = []
@@ -313,57 +312,6 @@ class MuseTalkModel:
                             logger.error("   립싱크 품질이 저하됩니다!")
                             logger.error("=" * 60)
                             self._face_parser = None
-
-                        # =====================================================
-                        # GFPGAN 초기화 (얼굴 복원/선명화)
-                        # =====================================================
-                        try:
-                            from gfpgan import GFPGANer
-
-                            # GFPGAN 모델 경로 확인
-                            gfpgan_model_path = model_base_dir / "gfpgan" / "GFPGANv1.4.pth"
-                            if not gfpgan_model_path.exists():
-                                # 대체 경로 확인
-                                alt_paths = [
-                                    Path("models/gfpgan/GFPGANv1.4.pth"),
-                                    Path("weights/GFPGANv1.4.pth"),
-                                    Path.home() / ".cache" / "gfpgan" / "weights" / "GFPGANv1.4.pth",
-                                ]
-                                for alt_path in alt_paths:
-                                    if alt_path.exists():
-                                        gfpgan_model_path = alt_path
-                                        break
-
-                            if gfpgan_model_path.exists():
-                                self._gfpgan = GFPGANer(
-                                    model_path=str(gfpgan_model_path),
-                                    upscale=1,  # 업스케일 없이 복원만
-                                    arch='clean',
-                                    channel_multiplier=2,
-                                    bg_upsampler=None,
-                                    device=self.device
-                                )
-                                logger.info("=" * 50)
-                                logger.info("✅ GFPGAN 초기화 성공")
-                                logger.info(f"   모델: {gfpgan_model_path}")
-                                logger.info("   얼굴 복원으로 립싱크 품질 향상!")
-                                logger.info("=" * 50)
-                            else:
-                                logger.warning("=" * 60)
-                                logger.warning("⚠️ GFPGAN 모델 없음 - 선택적 기능")
-                                logger.warning(f"   경로: {gfpgan_model_path}")
-                                logger.warning("")
-                                logger.warning("   다운로드 방법:")
-                                logger.warning("   wget https://github.com/TencentARC/GFPGAN/releases/download/v1.3.0/GFPGANv1.4.pth")
-                                logger.warning("   mkdir -p models/gfpgan && mv GFPGANv1.4.pth models/gfpgan/")
-                                logger.warning("=" * 60)
-                                self._gfpgan = None
-                        except ImportError:
-                            logger.warning("GFPGAN 패키지 미설치 - pip install gfpgan")
-                            self._gfpgan = None
-                        except Exception as e:
-                            logger.warning(f"GFPGAN 초기화 실패: {e}")
-                            self._gfpgan = None
 
                         logger.info("MuseTalk models loaded successfully")
                     else:
@@ -842,37 +790,11 @@ class MuseTalkModel:
                     # VAE 출력을 원본 얼굴 크기로 리사이즈 (CUBIC - 아티팩트 최소화)
                     result_face = cv2.resize(result_256, (x2 - x1, y2 - y1), interpolation=cv2.INTER_CUBIC)
 
-                    # 🔑 GFPGAN 얼굴 복원 적용 (선택적)
-                    if self._gfpgan is not None:
-                        try:
-                            # GFPGAN은 BGR 이미지를 받음
-                            _, _, restored_face = self._gfpgan.enhance(
-                                result_face,
-                                has_aligned=True,  # 이미 정렬된 얼굴
-                                only_center_face=True,
-                                paste_back=False
-                            )
-                            if restored_face is not None:
-                                # GFPGAN 출력 크기가 다를 수 있으므로 리사이즈
-                                if restored_face.shape[:2] != result_face.shape[:2]:
-                                    restored_face = cv2.resize(
-                                        restored_face,
-                                        (result_face.shape[1], result_face.shape[0]),
-                                        interpolation=cv2.INTER_CUBIC
-                                    )
-                                result_face = restored_face
-                                logger.debug("✅ GFPGAN 얼굴 복원 적용됨")
-                        except Exception as e:
-                            logger.debug(f"GFPGAN 적용 실패, Unsharp Mask로 대체: {e}")
-                            # 폴백: Unsharp Mask만 적용
-                            gaussian = cv2.GaussianBlur(result_face, (0, 0), 2.0)
-                            result_face = cv2.addWeighted(result_face, 1.5, gaussian, -0.5, 0)
-                            result_face = np.clip(result_face, 0, 255).astype(np.uint8)
-                    else:
-                        # GFPGAN 없으면 Unsharp Mask만 적용
-                        gaussian = cv2.GaussianBlur(result_face, (0, 0), 2.0)
-                        result_face = cv2.addWeighted(result_face, 1.5, gaussian, -0.5, 0)
-                        result_face = np.clip(result_face, 0, 255).astype(np.uint8)
+                    # 🔑 Unsharp Mask 샤프닝 적용 (VAE 출력 선명화)
+                    # 실시간 처리를 위해 경량 필터 사용
+                    gaussian = cv2.GaussianBlur(result_face, (0, 0), 2.0)
+                    result_face = cv2.addWeighted(result_face, 1.5, gaussian, -0.5, 0)
+                    result_face = np.clip(result_face, 0, 255).astype(np.uint8)
 
                     result_face_pil = Image.fromarray(result_face[:, :, ::-1])
                     
@@ -1497,7 +1419,6 @@ class MuseTalkModel:
         self._whisper = None
         self._positional_encoding = None
         self._face_parser = None
-        self._gfpgan = None
         self._face_cache.clear()
         self._initialized = False
 
