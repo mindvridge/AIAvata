@@ -874,6 +874,15 @@ class MuseTalkModel:
                     result_face = cv2.addWeighted(result_face, 1.5, gaussian, -0.5, 0)
                     result_face = np.clip(result_face, 0, 255).astype(np.uint8)
 
+                    # 🔑 크기 검증 및 강제 맞춤 (찌그러짐 방지)
+                    expected_w, expected_h = x2 - x1, y2 - y1
+                    actual_h, actual_w = result_face.shape[:2]
+
+                    if actual_w != expected_w or actual_h != expected_h:
+                        logger.warning(f"⚠️ 크기 불일치 감지: 실제=({actual_w}x{actual_h}), 예상=({expected_w}x{expected_h})")
+                        result_face = cv2.resize(result_face, (expected_w, expected_h), interpolation=cv2.INTER_CUBIC)
+                        logger.info(f"✅ 크기 강제 조정: ({expected_w}x{expected_h})")
+
                     result_face_pil = Image.fromarray(result_face[:, :, ::-1])
                     
                     # face_large에 result_face 붙이기
