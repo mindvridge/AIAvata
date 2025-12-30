@@ -72,6 +72,8 @@ class PipelineOrchestrator:
             sample_rate=settings.tts_sample_rate,
             device=settings.get_device(),
             enable_compile=getattr(settings, 'tts_enable_compile', False),
+            # Edge TTS 설정
+            edge_voice=getattr(settings, 'edge_voice', 'ko-KR-SunHiNeural'),
             # ElevenLabs 설정
             elevenlabs_api_key=getattr(settings, 'elevenlabs_api_key', None),
             elevenlabs_voice_id=getattr(settings, 'elevenlabs_voice_id', None),

@@ -381,7 +381,7 @@ if errorlevel 1 (
     )
 
     pip install fastapi uvicorn python-dotenv websockets aiofiles pydantic -q
-    pip install "protobuf>=3.20,<5.0" -q
+    pip install "protobuf>=4.25.3,<5.0.0" -q
 
     REM Install opencv-python compatible with NumPy 1.x (4.8.x supports numpy<2)
     pip uninstall opencv-python-headless opencv-python opencv-contrib-python -y 2>nul

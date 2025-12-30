@@ -61,16 +61,40 @@ export function useAvatarSession(
       // base64로 인코딩된 오디오 데이터 디코딩
       try {
         const audioBase64 = message.data || message.audio; // "data" 또는 "audio" 필드 지원
+        if (!audioBase64) {
+          console.error('%c❌ 오디오 데이터 없음: audio_data 메시지에 data 또는 audio 필드가 없습니다.', 'color: red; font-weight: bold; font-size: 14px');
+          return;
+        }
         const binaryString = atob(audioBase64);
         const audioArrayBuffer = new ArrayBuffer(binaryString.length);
         const audioView = new Uint8Array(audioArrayBuffer);
         for (let i = 0; i < binaryString.length; i++) {
           audioView[i] = binaryString.charCodeAt(i);
         }
+        console.log(`%c✅ 오디오 데이터 수신 및 디코딩 완료: ${audioArrayBuffer.byteLength} bytes, ${message.sample_rate || 24000}Hz`, 'color: green; font-weight: bold');
         onAudioData?.(audioArrayBuffer, message.sample_rate || 24000);
       } catch (error) {
-        console.error('오디오 데이터 디코딩 실패:', error);
+        const errorMsg = error instanceof Error ? error.message : String(error);
+        console.error('%c❌ 오디오 데이터 디코딩 실패:', 'color: red; font-weight: bold; font-size: 14px', error);
+        console.error('%c오류 상세:', 'color: red; font-weight: bold', {
+          error: errorMsg,
+          stack: error instanceof Error ? error.stack : undefined,
+          messageType: message.type,
+          hasData: !!message.data,
+          hasAudio: !!message.audio,
+          dataLength: message.data?.length,
+          audioLength: message.audio?.length,
+          sampleRate: message.sample_rate,
+        });
       }
+    } else if (message.type === 'sentence_error') {
+      const errorMsg = `문장 ${message.sentence_index + 1}/${message.total_sentences} 오류: ${message.error || '알 수 없는 오류'}`;
+      console.error('%c❌ TTS 문장 처리 오류:', 'color: red; font-weight: bold; font-size: 14px', errorMsg);
+      console.error('%c오류 상세:', 'color: red; font-weight: bold', message);
+    } else if (message.type === 'streaming_error') {
+      const errorMsg = message.error || '스트리밍 오류';
+      console.error('%c❌ TTS 스트리밍 오류:', 'color: red; font-weight: bold; font-size: 14px', errorMsg);
+      console.error('%c오류 상세:', 'color: red; font-weight: bold', message);
     }
   }, [onChatResponse, onAudioData]);
 

@@ -1,0 +1,145 @@
+/**
+ * Idle 비디오 녹화 유틸리티
+ * 프레임들을 수집하여 실제 비디오 파일로 변환
+ */
+
+/**
+ * 프레임들을 비디오 Blob으로 변환
+ */
+export async function createVideoFromFrames(
+  frames: ArrayBuffer[],
+  width: number = 512,
+  height: number = 512,
+  fps: number = 30
+): Promise<Blob> {
+  return new Promise((resolve, reject) => {
+    if (frames.length === 0) {
+      reject(new Error('No frames to convert'));
+      return;
+    }
+
+    // Canvas 생성
+    const canvas = document.createElement('canvas');
+    canvas.width = width;
+    canvas.height = height;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) {
+      reject(new Error('Failed to get canvas context'));
+      return;
+    }
+
+    // Canvas에서 스트림 캡처
+    const stream = canvas.captureStream(fps);
+    
+    // MediaRecorder 생성
+    const mimeTypes = [
+      'video/webm;codecs=vp9',
+      'video/webm;codecs=vp8',
+      'video/webm',
+    ];
+
+    let selectedMimeType = '';
+    for (const mimeType of mimeTypes) {
+      if (MediaRecorder.isTypeSupported(mimeType)) {
+        selectedMimeType = mimeType;
+        break;
+      }
+    }
+
+    if (!selectedMimeType) {
+      reject(new Error('WebM 형식을 지원하지 않는 브라우저입니다.'));
+      return;
+    }
+
+    const mediaRecorder = new MediaRecorder(stream, {
+      mimeType: selectedMimeType,
+      videoBitsPerSecond: 2000000, // 2Mbps
+    });
+
+    const chunks: Blob[] = [];
+
+    mediaRecorder.ondataavailable = (event) => {
+      if (event.data && event.data.size > 0) {
+        chunks.push(event.data);
+      }
+    };
+
+    mediaRecorder.onstop = () => {
+      if (chunks.length > 0) {
+        const blob = new Blob(chunks, { type: selectedMimeType });
+        console.log(`%c✅ 비디오 생성 완료: ${(blob.size / 1024).toFixed(2)}KB`, 'color: green; font-weight: bold');
+        resolve(blob);
+      } else {
+        reject(new Error('No video data recorded'));
+      }
+    };
+
+    mediaRecorder.onerror = (event) => {
+      reject(new Error('MediaRecorder error'));
+    };
+
+    // 녹화 시작
+    mediaRecorder.start();
+
+    // 프레임들을 순차적으로 canvas에 그리기
+    let frameIndex = 0;
+    const frameInterval = 1000 / fps; // ms per frame
+
+    const drawNextFrame = () => {
+      if (frameIndex >= frames.length) {
+        // 모든 프레임을 그렸으면 녹화 중지
+        setTimeout(() => {
+          if (mediaRecorder.state !== 'inactive') {
+            mediaRecorder.stop();
+          }
+        }, frameInterval);
+        return;
+      }
+
+      const frameData = frames[frameIndex];
+      const blob = new Blob([frameData], { type: 'image/jpeg' });
+      const url = URL.createObjectURL(blob);
+      const img = new Image();
+
+      img.onload = () => {
+        // Canvas에 프레임 그리기
+        ctx.clearRect(0, 0, width, height);
+        ctx.drawImage(img, 0, 0, width, height);
+        URL.revokeObjectURL(url);
+
+        frameIndex++;
+        // 다음 프레임으로 (FPS에 맞춰)
+        setTimeout(drawNextFrame, frameInterval);
+      };
+
+      img.onerror = () => {
+        URL.revokeObjectURL(url);
+        frameIndex++;
+        setTimeout(drawNextFrame, frameInterval);
+      };
+
+      img.src = url;
+    };
+
+    // 첫 프레임 그리기
+    const firstFrameBlob = new Blob([frames[0]], { type: 'image/jpeg' });
+    const firstFrameUrl = URL.createObjectURL(firstFrameBlob);
+    const firstImg = new Image();
+    
+    firstImg.onload = () => {
+      ctx.drawImage(firstImg, 0, 0, width, height);
+      URL.revokeObjectURL(firstFrameUrl);
+      frameIndex = 1;
+      // 약간의 지연 후 다음 프레임 시작 (MediaRecorder가 초기화될 시간 확보)
+      setTimeout(drawNextFrame, frameInterval);
+    };
+
+    firstImg.onerror = () => {
+      URL.revokeObjectURL(firstFrameUrl);
+      reject(new Error('Failed to load first frame'));
+    };
+
+    firstImg.src = firstFrameUrl;
+  });
+}
+

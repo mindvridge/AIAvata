@@ -17,6 +17,8 @@ diffusers>=0.27.0
 transformers>=4.36.0
 accelerate>=0.25.0
 einops>=0.7.0
+# protobuf 버전 제약: mediapipe는 <5.0 필요, diffusers는 4.x와도 호환
+protobuf>=4.25.3,<5.0.0  # mediapipe compatibility (mediapipe requires protobuf<5,>=4.25.3)
 
 # STT (SenseVoice)
 funasr>=1.0.0
@@ -50,6 +52,7 @@ pillow>=10.0.0
 scipy>=1.11.0
 librosa>=0.10.0
 soundfile>=0.12.0
+setuptools>=70.0.0  # pymilvus requires setuptools>69
 
 # Testing
 pytest>=7.0.0

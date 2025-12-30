@@ -222,11 +222,17 @@ class AvatarWebSocketHandler:
             )
             self._active_connections[connection_id]["heartbeat_task"] = heartbeat_task
 
-            # 백그라운드에서 idle 스트림 자동 시작
-            idle_task = asyncio.create_task(
-                self._start_idle_stream_background(websocket, uuid_session, connection_id)
-            )
-            self._active_connections[connection_id]["idle_task"] = idle_task
+            # 백그라운드에서 idle 스트림 자동 시작 (설정에 따라 비활성화 가능)
+            # 기본값은 True (로컬 비디오 재생 사용)
+            if not getattr(self.pipeline.settings, 'disable_server_idle_stream', True):
+                idle_task = asyncio.create_task(
+                    self._start_idle_stream_background(websocket, uuid_session, connection_id)
+                )
+                self._active_connections[connection_id]["idle_task"] = idle_task
+                logger.info(f"Server-side idle stream enabled for connection {connection_id}")
+            else:
+                logger.info(f"✅ Server-side idle stream disabled for connection {connection_id} (using local video playback in frontend)")
+                self._active_connections[connection_id]["idle_task"] = None
 
             # 메시지 수신 루프
             while True:
@@ -279,13 +285,15 @@ class AvatarWebSocketHandler:
                     except asyncio.CancelledError:
                         pass
 
-            # idle 스트림 취소
-            if idle_task and not idle_task.done():
-                idle_task.cancel()
-                try:
-                    await idle_task
-                except asyncio.CancelledError:
-                    pass
+            # idle 스트림 취소 (connection에서 가져옴)
+            if connection and connection.get("idle_task"):
+                idle_task = connection["idle_task"]
+                if not idle_task.done():
+                    idle_task.cancel()
+                    try:
+                        await idle_task
+                    except asyncio.CancelledError:
+                        pass
 
             # 세션 상태 저장 (재연결 지원)
             if connection_id in self._active_connections:
@@ -807,43 +815,41 @@ class AvatarWebSocketHandler:
 
         await self._send_status(websocket, "processing")
 
-        first_sentence = True
         total_frames_sent = 0
         target_fps = self.pipeline.settings.target_fps
         frame_duration = 1.0 / target_fps
         chunk_size = self.pipeline.settings.tts_chunk_size
-        failed_sentences = []
 
         try:
+            # 문장 단위 TTS 스트리밍 (오디오-비디오 동기화를 위해)
+            logger.info(f"🔄 Starting sentence TTS streaming for text: '{response_text[:100]}...'")
+            stream_started = False
+            first_sentence = True
+            
             # 문장별 실시간 TTS 스트리밍
             async for audio_np, sentence, idx, total in self.pipeline.tts.synthesize_sentences_streaming(
                 text=response_text,
                 voice_id=None,
                 language=language,
             ):
+                stream_started = True
                 # 연결 확인
                 if connection_id not in self._active_connections:
                     logger.warning("Connection closed during streaming")
                     break
 
                 if audio_np is None or len(audio_np) == 0:
-                    logger.warning(f"Empty audio for sentence {idx+1}")
-                    failed_sentences.append(idx + 1)
-                    # 클라이언트에 에러 알림
-                    await self._send_json(websocket, {
-                        "type": "sentence_error",
-                        "sentence_index": idx,
-                        "total_sentences": total,
-                        "error": "Empty audio generated",
-                    })
+                    logger.warning(f"⚠️ 문장 {idx+1}/{total} 빈 오디오, 건너뜀")
                     continue
-
+                
+                logger.info(f"✅ 문장 {idx+1}/{total} 오디오 수신: {len(audio_np)} samples")
+                
                 # numpy array를 bytes로 변환 (16-bit PCM)
                 audio_bytes = self.pipeline.tts._audio_to_bytes(audio_np)
-
-                # 립싱크 프레임 생성 (팩토리 함수로 클로저 버그 방지)
+                
+                # 립싱크 비디오 프레임 생성 (오디오와 동기화)
                 audio_generator = self._make_audio_stream_generator(audio_bytes, chunk_size)
-
+                
                 video_frames = []
                 try:
                     async for frame in self.pipeline.renderer.render_with_audio(
@@ -852,23 +858,18 @@ class AvatarWebSocketHandler:
                     ):
                         video_frames.append(frame.data)
                 except Exception as e:
-                    logger.error(f"Error generating lip sync for sentence {idx+1}: {e}")
-                    failed_sentences.append(idx + 1)
-                    # 클라이언트에 에러 알림
-                    await self._send_json(websocket, {
-                        "type": "sentence_error",
-                        "sentence_index": idx,
-                        "total_sentences": total,
-                        "error": f"Lip sync generation failed: {str(e)[:100]}",
-                    })
+                    import traceback
+                    error_trace = traceback.format_exc()
+                    logger.error(f"❌ 문장 {idx+1}/{total} 립싱크 생성 실패: {str(e)}")
+                    logger.error(f"❌ 에러 상세:\n{error_trace}")
                     continue
 
                 logger.info(f"🎬 문장 {idx+1}/{total} 립싱크 완료: {len(video_frames)} 프레임")
-
-                # 첫 문장일 때만 idle 루프 종료 대기
+                
+                # 첫 문장일 때만 idle 루프 종료 대기 및 상태 전이
                 if first_sentence:
                     first_sentence = False
-
+                    
                     # 루프 끝 대기 (최대 5초)
                     logger.info("🎬 Waiting for idle loop to complete for smooth transition...")
                     loop_completed = await self.pipeline.renderer.wait_for_loop_end(timeout=5.5)
@@ -893,7 +894,7 @@ class AvatarWebSocketHandler:
                     state_machine.transition_to(ConnectionState.SPEAKING)
                     await self._send_status(websocket, "speaking")
 
-                # 오디오 데이터 전송 (문장별)
+                # 오디오 데이터 전송 (문장별로 전송 - 비디오 프레임 생성 완료 후)
                 audio_base64 = base64.b64encode(audio_bytes).decode('utf-8')
                 await self._send_json(websocket, {
                     "type": "audio_data",
@@ -902,12 +903,11 @@ class AvatarWebSocketHandler:
                     "frame_count": len(video_frames),
                     "sentence_index": idx,
                     "total_sentences": total,
-                    "sentence_text": sentence[:50],  # 디버깅용
                 })
 
                 logger.info(f"🔊 문장 {idx+1}/{total} 오디오 전송, 비디오 스트리밍 시작...")
 
-                # 비디오 프레임을 FPS에 맞춰 전송
+                # 비디오 프레임을 FPS에 맞춰 전송 (오디오와 동기화)
                 for frame_data in video_frames:
                     frame_start = time.time()
 
@@ -915,8 +915,14 @@ class AvatarWebSocketHandler:
                         logger.warning("Connection closed during video streaming")
                         break
 
-                    await websocket.send_bytes(frame_data)
-                    total_frames_sent += 1
+                    try:
+                        await websocket.send_bytes(frame_data)
+                        total_frames_sent += 1
+                    except RuntimeError as e:
+                        if "close message" in str(e) or "disconnect" in str(e).lower():
+                            logger.warning("WebSocket closed, stopping video stream")
+                            break
+                        raise
 
                     # FPS에 맞춰 대기
                     elapsed = time.time() - frame_start
@@ -926,16 +932,18 @@ class AvatarWebSocketHandler:
 
                 # 프레임 메모리 즉시 해제
                 video_frames.clear()
-
+                
                 logger.info(f"✅ 문장 {idx+1}/{total} 완료")
 
+            if not stream_started:
+                logger.warning("⚠️ TTS 스트리밍이 시작되지 않았습니다. synthesize_sentences_streaming이 아무것도 yield하지 않았습니다.")
+            
             logger.info(f"✅ 실시간 TTS 스트리밍 완료: 총 {total_frames_sent} 프레임 전송")
 
             # 스트리밍 완료 알림
             await self._send_json(websocket, {
                 "type": "streaming_complete",
                 "total_frames": total_frames_sent,
-                "failed_sentences": failed_sentences if failed_sentences else None,
             })
 
             # 립싱크 완료 후 CONNECTED 상태로 전이 및 idle 스트림 재시작
@@ -943,21 +951,31 @@ class AvatarWebSocketHandler:
                 state_machine.transition_to(ConnectionState.CONNECTED)
                 await self._send_state_status(websocket, state_machine.state)
 
-                connection = self._active_connections[connection_id]
-                if not connection.get("idle_task") or (hasattr(connection["idle_task"], 'done') and connection["idle_task"].done()):
-                    logger.debug("Restarting idle stream after lip sync")
-                    idle_task = asyncio.create_task(
-                        self._start_idle_stream_background(websocket, session_id, connection_id)
-                    )
-                    connection["idle_task"] = idle_task
+                # 서버 사이드 idle 스트림이 활성화된 경우에만 재시작
+                disable_idle_stream = getattr(self.pipeline.settings, 'disable_server_idle_stream', True)
+                if not disable_idle_stream:
+                    connection = self._active_connections[connection_id]
+                    if not connection.get("idle_task") or (hasattr(connection["idle_task"], 'done') and connection["idle_task"].done()):
+                        logger.debug("Restarting idle stream after lip sync")
+                        idle_task = asyncio.create_task(
+                            self._start_idle_stream_background(websocket, session_id, connection_id)
+                        )
+                        connection["idle_task"] = idle_task
+                else:
+                    logger.debug("Server-side idle stream disabled, not restarting after lip sync")
 
         except Exception as e:
-            logger.error(f"TTS/Lipsync streaming error: {e}", exc_info=True)
+            import traceback
+            error_trace = traceback.format_exc()
+            logger.error(f"❌ TTS/Lipsync streaming error: {e}", exc_info=True)
+            logger.error(f"❌ 에러 상세:\n{error_trace}")
             state_machine.transition_to(ConnectionState.ERROR)
-            # 클라이언트에 에러 알림
+            # 클라이언트에 에러 알림 (상세 정보 포함)
             await self._send_json(websocket, {
                 "type": "streaming_error",
-                "error": str(e)[:200],
+                "error": str(e),
+                "error_type": type(e).__name__,
+                "message": f"TTS/립싱크 스트리밍 오류: {str(e)}",
             })
 
         finally:

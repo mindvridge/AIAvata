@@ -42,6 +42,8 @@ function App() {
   const [isChatLoading, setIsChatLoading] = useState(false);
   const [audioData, setAudioData] = useState<ArrayBuffer | null>(null);
   const [audioLevel, setAudioLevel] = useState(0);
+  const [isRecordingIdleVideo, setIsRecordingIdleVideo] = useState(false);
+  const [hasLocalVideoFile, setHasLocalVideoFile] = useState<boolean | null>(null); // null = 확인 중
 
   // Error logger
   const {
@@ -54,17 +56,162 @@ function App() {
     warningCount,
   } = useErrorLogger();
 
-  // Handle video frames from WebSocket - AvatarView에 전달
+  // Idle 프레임 수집 상태
+  const collectedFramesRef = useRef<ArrayBuffer[]>([]);
+  const isCollectingRef = useRef(false);
+  
+  // Pipeline state와 emotion을 ref로 관리 (useAvatarSession 호출 전에 정의해야 함)
+  const pipelineStateRef = useRef<string>('idle');
+  const emotionRef = useRef<string>('neutral');
+
+  // Handle video frames from WebSocket - AvatarView에 전달 + idle 프레임 수집
+  // (참고: pipelineState와 emotion은 ref를 통해 접근, useAvatarSession 호출 후 업데이트됨)
   const handleVideoFrame = useCallback((data: ArrayBuffer) => {
     console.log('📥 App: Received video frame, size:', data.byteLength);
     setFrameData(data);
+    
+    const currentPipelineState = pipelineStateRef.current;
+    const currentEmotion = emotionRef.current;
+    
+    // idle 상태이고 로컬 비디오가 없을 때 프레임 수집 (캐시 생성)
+    if (currentPipelineState === 'idle' && !isCollectingRef.current && collectedFramesRef.current.length === 0) {
+      // 먼저 캐시 확인
+      import('./utils/idleVideoCache').then(({ getCachedIdleVideo }) => {
+        return getCachedIdleVideo(currentEmotion);
+      }).then((cached) => {
+        if (!cached) {
+          // 캐시가 없으면 수집 시작
+          isCollectingRef.current = true;
+          collectedFramesRef.current = [];
+          console.log('%c🎬 Idle 프레임 수집 시작 (캐시 생성)', 'color: blue; font-weight: bold');
+        }
+      }).catch(() => {
+        isCollectingRef.current = true;
+        collectedFramesRef.current = [];
+      });
+    }
+    
+    // 프레임 수집 중이면 수집
+    if (isCollectingRef.current) {
+      if (collectedFramesRef.current.length < 90) {
+        // 프레임 복사 (ArrayBuffer는 복사 필요)
+        const frameCopy = new ArrayBuffer(data.byteLength);
+        new Uint8Array(frameCopy).set(new Uint8Array(data));
+        collectedFramesRef.current.push(frameCopy);
+      } else {
+        // 충분한 프레임 수집 완료, 비디오로 변환 후 캐시 저장
+        const frames = [...collectedFramesRef.current];
+        isCollectingRef.current = false;
+        collectedFramesRef.current = [];
+        
+        // 프레임들을 비디오로 변환하고 캐시에 저장
+        import('./utils/idleVideoCache').then(({ cacheIdleVideoFrames }) => {
+          cacheIdleVideoFrames(frames, currentEmotion, 512, 512, 30).then(() => {
+            console.log(`%c✅ Idle 비디오 캐시 저장 완료: ${currentEmotion} (${frames.length} frames)`, 'color: green; font-weight: bold');
+          }).catch(console.error);
+        });
+      }
+    }
   }, []);
 
   // Audio context ref for playback
   const audioContextRef = useRef<AudioContext | null>(null);
+  const audioQueueRef = useRef<Array<{ data: ArrayBuffer; sampleRate: number }>>([]);
+  const isPlayingAudioRef = useRef(false);
+
+  // 오디오 재생 큐 처리
+  const processAudioQueue = useCallback(async () => {
+    if (isPlayingAudioRef.current || audioQueueRef.current.length === 0) {
+      return;
+    }
+
+    isPlayingAudioRef.current = true;
+
+    while (audioQueueRef.current.length > 0) {
+      const { data, sampleRate } = audioQueueRef.current.shift()!;
+
+      try {
+        // AudioContext 초기화 (최초 한 번만)
+        if (!audioContextRef.current) {
+          audioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)();
+          console.log('%c🎵 AudioContext 초기화 완료', 'color: blue; font-weight: bold');
+        }
+
+        const audioContext = audioContextRef.current;
+
+        // AudioContext 상태 확인 및 재개
+        if (audioContext.state === 'suspended') {
+          console.log('⚠️ AudioContext가 일시정지 상태입니다. 재개 시도 중...');
+          try {
+            await audioContext.resume();
+            console.log('%c✅ AudioContext 재개 완료', 'color: green; font-weight: bold');
+          } catch (err) {
+            console.error('❌ AudioContext 재개 실패:', err);
+            addError(`오디오 재생 불가: 브라우저가 오디오 자동 재생을 차단했습니다. 페이지를 클릭한 후 다시 시도해주세요.`, 'Audio', { error: err });
+            continue;
+          }
+        }
+
+        // 16-bit PCM을 Float32로 변환
+        const pcmData = new Int16Array(data);
+        const floatData = new Float32Array(pcmData.length);
+        for (let i = 0; i < pcmData.length; i++) {
+          floatData[i] = pcmData[i] / 32768.0;
+        }
+
+        // AudioBuffer 생성
+        const audioBuffer = audioContext.createBuffer(1, floatData.length, sampleRate);
+        audioBuffer.copyToChannel(floatData, 0);
+
+        // 재생 (Promise로 대기하여 순차 재생 보장)
+        await new Promise<void>((resolve, reject) => {
+          try {
+            const source = audioContext.createBufferSource();
+            source.buffer = audioBuffer;
+            source.connect(audioContext.destination);
+            
+            source.onended = () => {
+              console.log(`%c✅ 오디오 재생 완료: ${(floatData.length / sampleRate).toFixed(2)}초`, 'color: green; font-weight: bold');
+              resolve();
+            };
+            
+            source.onerror = (error) => {
+              console.error('%c❌ 오디오 재생 중 오류:', 'color: red; font-weight: bold', error);
+              reject(error);
+            };
+
+            source.start(0);
+            console.log(`%c🔊 Playing audio: ${floatData.length} samples at ${sampleRate}Hz (${(floatData.length / sampleRate).toFixed(2)}초)`, 'color: green; font-weight: bold');
+          } catch (error) {
+            reject(error);
+          }
+        });
+
+      } catch (error) {
+        const errorMsg = error instanceof Error ? error.message : String(error);
+        console.error('%c❌ 오디오 재생 실패:', 'color: red; font-weight: bold; font-size: 14px', error);
+        console.error('%c오류 상세:', 'color: red; font-weight: bold', {
+          error,
+          dataLength: data.byteLength,
+          sampleRate,
+          audioContextState: audioContextRef.current?.state,
+        });
+        addError(`오디오 재생 실패: ${errorMsg}`, 'Audio', { 
+          error: errorMsg,
+          dataLength: data.byteLength,
+          sampleRate,
+          audioContextState: audioContextRef.current?.state,
+        });
+      }
+    }
+
+    isPlayingAudioRef.current = false;
+  }, [addError]);
 
   // Handle audio data from server - AudioWaveform에 전달 + 오디오 재생
   const handleAudioDataFromServer = useCallback((data: ArrayBuffer, sampleRate: number) => {
+    console.log(`%c📥 오디오 데이터 수신: ${data.byteLength} bytes, ${sampleRate}Hz`, 'color: blue; font-weight: bold');
+    
     setAudioData(data);
 
     // 오디오 레벨 계산 (간단한 방식)
@@ -78,40 +225,17 @@ function App() {
       const level = Math.min(average / 32767, 1.0); // 0-1 범위로 정규화
       setAudioLevel(level);
     } catch (error) {
-      console.error('오디오 레벨 계산 실패:', error);
+      const errorMsg = error instanceof Error ? error.message : String(error);
+      console.error('%c❌ 오디오 레벨 계산 실패:', 'color: red; font-weight: bold', error);
+      addWarning(`오디오 레벨 계산 실패: ${errorMsg}`, 'Audio');
     }
 
-    // 오디오 재생
-    try {
-      // AudioContext 초기화 (최초 한 번만)
-      if (!audioContextRef.current) {
-        audioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)();
-      }
-
-      const audioContext = audioContextRef.current;
-
-      // 16-bit PCM을 Float32로 변환
-      const pcmData = new Int16Array(data);
-      const floatData = new Float32Array(pcmData.length);
-      for (let i = 0; i < pcmData.length; i++) {
-        floatData[i] = pcmData[i] / 32768.0;
-      }
-
-      // AudioBuffer 생성
-      const audioBuffer = audioContext.createBuffer(1, floatData.length, sampleRate);
-      audioBuffer.copyToChannel(floatData, 0);
-
-      // 재생
-      const source = audioContext.createBufferSource();
-      source.buffer = audioBuffer;
-      source.connect(audioContext.destination);
-      source.start(0);
-
-      console.log(`🔊 Playing audio: ${floatData.length} samples at ${sampleRate}Hz`);
-    } catch (error) {
-      console.error('오디오 재생 실패:', error);
-    }
-  }, []);
+    // 오디오를 큐에 추가
+    audioQueueRef.current.push({ data, sampleRate });
+    
+    // 큐 처리 시작
+    processAudioQueue();
+  }, [addError, addWarning, processAudioQueue]);
 
   // Handle chat response from WebSocket
   const handleChatResponse = useCallback((response: { text: string; userMessage: string }) => {
@@ -145,12 +269,57 @@ function App() {
     autoConnect: false,
   });
 
+  // pipelineState와 emotion을 ref에 동기화 (handleVideoFrame에서 사용)
+  useEffect(() => {
+    pipelineStateRef.current = pipelineState;
+  }, [pipelineState]);
+
+  useEffect(() => {
+    emotionRef.current = emotion;
+  }, [emotion]);
+
   // Handle audio data from recorder
   const handleAudioData = useCallback((data: ArrayBuffer) => {
     if (isConnected) {
       sendAudio(data);
     }
   }, [isConnected, sendAudio]);
+
+  // 사용자 인터랙션 시 AudioContext 초기화 (브라우저 자동 재생 정책 대응)
+  useEffect(() => {
+    const initAudioContext = async () => {
+      if (!audioContextRef.current) {
+        try {
+          audioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)();
+          // 초기 상태가 suspended일 수 있으므로 resume 시도
+          if (audioContextRef.current.state === 'suspended') {
+            // 사용자 인터랙션 후 자동으로 resume되도록 설정
+            console.log('%c🎵 AudioContext 초기화 (suspended 상태)', 'color: blue; font-weight: bold');
+          } else {
+            console.log('%c🎵 AudioContext 초기화 완료', 'color: green; font-weight: bold');
+          }
+        } catch (error) {
+          console.error('%c❌ AudioContext 초기화 실패:', 'color: red; font-weight: bold', error);
+        }
+      }
+    };
+
+    // 클릭 이벤트로 AudioContext 초기화
+    const handleUserInteraction = () => {
+      initAudioContext();
+      // 한 번만 실행되도록 이벤트 제거
+      document.removeEventListener('click', handleUserInteraction);
+      document.removeEventListener('touchstart', handleUserInteraction);
+    };
+
+    document.addEventListener('click', handleUserInteraction);
+    document.addEventListener('touchstart', handleUserInteraction);
+
+    return () => {
+      document.removeEventListener('click', handleUserInteraction);
+      document.removeEventListener('touchstart', handleUserInteraction);
+    };
+  }, []);
 
   // Connect handler
   const handleConnect = useCallback(async () => {
@@ -237,7 +406,7 @@ function App() {
   }, []);
 
   return (
-    <div className="h-screen bg-avatar-bg text-white flex flex-col overflow-hidden">
+    <div className="h-screen text-white flex flex-col overflow-hidden" style={{ backgroundColor: '#1a1a2e' }}>
       {/* Header */}
       <header className="border-b border-gray-800 flex-shrink-0">
         <div className="max-w-[1920px] mx-auto px-2 sm:px-4 py-1.5 sm:py-2">
@@ -289,19 +458,19 @@ function App() {
       {/* Main content - flex로 공간 최적화, 스크롤 없음 */}
       <main className="flex-1 overflow-hidden max-w-[1920px] mx-auto w-full px-2 sm:px-4 py-1 sm:py-2 min-h-0">
         <div className="flex flex-col lg:flex-row gap-2 sm:gap-3 h-full">
-          {/* Avatar section - 컴팩트하게 배치, 공간 균등 분배 */}
-          <div className="flex-1 flex flex-col items-center gap-1 sm:gap-1.5 lg:gap-2 min-w-0 min-h-0 justify-center">
+          {/* Avatar section - 고정된 레이아웃, AudioWaveform은 절대 위치로 오버레이 */}
+          <div className="flex-1 flex flex-col items-center gap-1 sm:gap-1.5 lg:gap-2 min-w-0 min-h-0 relative">
             {/* Status bar */}
-            <div className="w-full max-w-full sm:max-w-lg flex-shrink-0">
+            <div className="w-full max-w-full sm:max-w-lg flex-shrink-0 z-10">
               <StatusBar
                 connectionState={connectionState}
                 showMetrics={isConnected}
               />
             </div>
 
-            {/* Avatar view - 화면에 맞게 크기 조정, 남은 공간 활용 */}
-            <div className="relative w-full max-w-full sm:max-w-md lg:max-w-lg flex-[2] min-h-0 flex items-center justify-center">
-              <div className="w-full h-full max-h-full aspect-square max-w-full">
+            {/* Avatar view - 고정 크기, 항상 동일한 공간 차지 */}
+            <div className="relative w-full max-w-full sm:max-w-md lg:max-w-lg flex-shrink-0 flex items-center justify-center" style={{ height: '512px', minHeight: '512px' }}>
+              <div className="w-full h-full aspect-square max-w-full">
                 <AvatarView
                   emotion={emotion}
                   pipelineState={pipelineState}
@@ -312,20 +481,22 @@ function App() {
                   height={512}
                 />
               </div>
-            </div>
 
-            {/* Audio waveform - 작게 */}
-            <div className="w-full max-w-full sm:max-w-lg flex-shrink-0">
-              <AudioWaveform
-                audioData={audioData}
-                audioLevel={audioLevel}
-                width={512}
-                height={60}
-                barColor="#3b82f6"
-                backgroundColor="#1f2937"
-                showLevel={false}
-                isActive={pipelineState === 'speaking' || pipelineState === 'processing'}
-              />
+              {/* Audio waveform - 오른쪽 상단 작은 크기로 오버레이 */}
+              <div className="absolute top-2 right-2 z-30">
+                <div className="bg-gray-900/90 backdrop-blur-sm rounded-lg border border-gray-700/50 p-1.5">
+                  <AudioWaveform
+                    audioData={audioData}
+                    audioLevel={audioLevel}
+                    width={120}
+                    height={30}
+                    barColor="#3b82f6"
+                    backgroundColor="transparent"
+                    showLevel={false}
+                    isActive={pipelineState === 'speaking' || pipelineState === 'processing'}
+                  />
+                </div>
+              </div>
             </div>
 
             {/* Audio recorder - 작게 */}

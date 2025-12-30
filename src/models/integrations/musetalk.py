@@ -291,15 +291,26 @@ class MuseTalkModel:
 
                             if face_parser_model_path.exists():
                                 self._face_parser = FaceParsing()
-                                logger.info("Face parser initialized")
+                                logger.info("=" * 50)
+                                logger.info("✅ Face Parser 초기화 성공")
+                                logger.info("   모델: models/face-parse-bisent/79999_iter.pth")
+                                logger.info("=" * 50)
                             else:
-                                logger.warning("⚠️ Face parser 모델 없음 (79999_iter.pth)")
-                                logger.warning("   다운로드: https://huggingface.co/vivym/face-parsing-bisenet/resolve/main/79999_iter.pth")
-                                logger.warning("   저장 경로: models/face-parse-bisent/79999_iter.pth")
-                                logger.warning("   (립싱크는 작동하지만 품질이 저하될 수 있습니다)")
+                                logger.error("=" * 60)
+                                logger.error("❌ FACE PARSER 모델 없음 - 립싱크 품질이 저하됩니다!")
+                                logger.error("   누락 파일: models/face-parse-bisent/79999_iter.pth")
+                                logger.error("")
+                                logger.error("   다운로드 방법:")
+                                logger.error("   1. https://huggingface.co/vivym/face-parsing-bisenet 접속")
+                                logger.error("   2. 79999_iter.pth 다운로드")
+                                logger.error("   3. models/face-parse-bisent/ 폴더에 저장")
+                                logger.error("=" * 60)
                                 self._face_parser = None
                         except Exception as e:
-                            logger.warning(f"Face parser initialization failed (non-critical): {e}")
+                            logger.error("=" * 60)
+                            logger.error(f"❌ FACE PARSER 초기화 실패: {e}")
+                            logger.error("   립싱크 품질이 저하됩니다!")
+                            logger.error("=" * 60)
                             self._face_parser = None
 
                         logger.info("MuseTalk models loaded successfully")
@@ -357,9 +368,13 @@ class MuseTalkModel:
             import torch
 
             # 오디오 특징 추출
-            logger.info(f"🎤 Extracting audio features: audio_chunk shape={audio_chunk.shape}, sample_rate={audio_sample_rate}")
+            audio_energy = np.sqrt(np.mean(audio_chunk**2)) if len(audio_chunk) > 0 else 0.0
+            logger.debug(f"🎤 Extracting audio features: shape={audio_chunk.shape}, sample_rate={audio_sample_rate}, energy={audio_energy:.4f}")
             audio_features = self._extract_audio_features(audio_chunk, audio_sample_rate)
-            logger.info(f"🎤 Audio features extracted: shape={audio_features.shape}")
+            if hasattr(audio_features, 'mean') and hasattr(audio_features, 'std'):
+                logger.debug(f"🎤 Audio features extracted: shape={audio_features.shape}, mean={audio_features.mean().item():.4f}, std={audio_features.std().item():.4f}")
+            else:
+                logger.debug(f"🎤 Audio features extracted: shape={audio_features.shape}")
 
             # VAE가 없으면 에러 표시
             if self._vae is None:
@@ -371,8 +386,30 @@ class MuseTalkModel:
             # 얼굴 영역 추출 (MediaPipe로 얼굴 감지 후 크롭)
             import cv2
 
-            # MediaPipe로 얼굴 위치 찾기
-            face_bbox = self._detect_face_bbox(source_frame)
+            # MediaPipe로 얼굴 위치 찾기 (캐시 사용)
+            # 아바타 이미지는 항상 같으므로 첫 번째 성공 결과를 캐시
+            cache_key = f"face_bbox_{source_frame.shape}"
+            if cache_key in self._face_cache:
+                face_bbox = self._face_cache[cache_key]
+                logger.debug(f"Using cached face_bbox: {face_bbox}")
+            else:
+                face_bbox = self._detect_face_bbox(source_frame)
+                if face_bbox is not None:
+                    self._face_cache[cache_key] = face_bbox
+                    logger.info(f"✅ Face detected and cached: {face_bbox}")
+                else:
+                    # 🔑 폴백: 아바타 이미지의 기본 얼굴 위치 (중앙)
+                    h, w = source_frame.shape[:2]
+                    # 얼굴이 이미지 중앙에 있다고 가정 (패딩 포함)
+                    face_size = int(min(w, h) * 0.7)  # 이미지의 70%
+                    cx, cy = w // 2, h // 2
+                    x1 = max(0, cx - face_size // 2)
+                    y1 = max(0, cy - face_size // 2)
+                    x2 = min(w, x1 + face_size)
+                    y2 = min(h, y1 + face_size)
+                    face_bbox = (x1, y1, x2, y2)
+                    self._face_cache[cache_key] = face_bbox
+                    logger.warning(f"⚠️ 얼굴 감지 실패 - 기본 위치 사용: {face_bbox}")
 
             if face_bbox is not None:
                 x1, y1, x2, y2 = face_bbox
@@ -398,57 +435,17 @@ class MuseTalkModel:
                     latent_input = latent_input.half()
 
             # 오디오 특징 처리 (MuseTalk 방식)
+            # _extract_audio_features가 이미 [batch, 50, 384] 형태를 반환
             device_obj = torch.device(self.device if torch.cuda.is_available() else "cpu")
             timesteps = torch.tensor([0], device=device_obj)
             
-            # audio_features 형태에 따라 처리
-            logger.debug(f"Audio features shape before processing: {audio_features.shape}")
-            
-            # MuseTalk의 get_whisper_chunk 결과는 [T, (c h) w] 형태
-            # 여기서는 실시간으로 [1, seq_len, features] 형태가 나오는데
-            # 이를 MuseTalk의 형식인 [batch, (c h) w]로 변환해야 함
-            
-            # audio_features가 [batch, features] 형태인 경우
-            if len(audio_features.shape) == 2:
-                # [batch, features] -> [batch, 1, features] -> [batch, (1) features]
-                # MuseTalk에서는 여러 프레임의 오디오를 쌓지만, 실시간에서는 1프레임씩
-                # PositionalEncoding을 위해 [batch, seq_len, features] 형태로 변환
-                if audio_features.shape[1] == 384:  # 단일 feature vector
-                    # [batch, 384] -> [batch, 1, 384]
-                    audio_features = audio_features.unsqueeze(1)
-                else:
-                    # 이미 올바른 형태
-                    pass
-            elif len(audio_features.shape) == 3:
-                # [batch, seq_len, features] 형태
-                pass
-            elif len(audio_features.shape) == 4:
-                # [batch, channels, height, width] -> [batch, (c h) w] (MuseTalk 형식)
-                from einops import rearrange
-                audio_features = rearrange(audio_features, 'b c h w -> b (c h) w')
+            logger.debug(f"Audio features from extractor: {audio_features.shape}")
             
             # PositionalEncoding 적용 (MuseTalk 방식)
-            # MuseTalk의 get_whisper_chunk 결과는 [batch, (c h) w] 형태
-            # PositionalEncoding은 [batch, seq_len, d_model] 형태를 기대
-            if self._positional_encoding:
-                # audio_features 형태에 따라 처리
-                if len(audio_features.shape) == 2:
-                    # [batch, features] -> [batch, 1, features]
-                    audio_features = audio_features.unsqueeze(1)
-                
-                # MuseTalk에서는 [batch, (c h) w] 형태인데, 이것을 PositionalEncoding에 전달
-                # PositionalEncoding은 [batch, seq_len, d_model] 형태를 기대
-                # 여기서 seq_len은 (c h)이고, d_model은 w (384)
-                if len(audio_features.shape) == 3:
-                    # [batch, seq_len, features] 형태
-                    # PositionalEncoding 적용
-                    audio_features = self._positional_encoding(audio_features.to(device_obj))
-                    logger.debug(f"Audio features after PE: shape={audio_features.shape}")
-                elif len(audio_features.shape) == 2:
-                    # [batch, features] 형태 -> [batch, 1, features]
-                    audio_features = audio_features.unsqueeze(1)
-                    audio_features = self._positional_encoding(audio_features.to(device_obj))
-                    logger.debug(f"Audio features after PE: shape={audio_features.shape}")
+            # 입력: [batch, 50, 384], 출력: [batch, 50, 384]
+            if self._positional_encoding and len(audio_features.shape) == 3:
+                audio_features = self._positional_encoding(audio_features.to(device_obj))
+                logger.debug(f"Audio features after PE: {audio_features.shape}")
             
             # UNet 추론 (실제 MuseTalk 방식)
             with torch.no_grad():
@@ -570,117 +567,254 @@ class MuseTalkModel:
             
             # 리사이즈 시도
             try:
-                # 원본 크기로 리사이즈
+                # VAE 출력을 256x256으로 리사이즈
                 result_256 = cv2.resize(output_np, (256, 256), interpolation=cv2.INTER_LINEAR)
-
-                # 얼굴 크롭 이미지 사용 (전체 프레임이 아닌 face_crop 사용!)
-                # 버그 수정: source_frame 대신 face_crop 사용해야 함
                 source_256 = face_crop.copy()
 
-                # 🔑 핵심: Face Parser로 입 영역 마스크 생성
-                mask = None
-                if self._face_parser is not None:
-                    try:
-                        # Face Parser로 정확한 입 영역 마스크 생성
-                        # FaceParsing은 PIL Image를 반환하므로 numpy로 변환 필요
-                        from PIL import Image
-                        parsing_result = self._face_parser(source_256)
+                # VAE 출력과 원본의 차이 로깅
+                diff = result_256.astype(np.float32) - source_256.astype(np.float32)
+                mouth_region_diff = np.abs(diff[155:215, 83:173])  # 입 영역만
+                avg_diff_mouth = np.mean(mouth_region_diff)
+                max_diff_mouth = np.max(mouth_region_diff)
+                
+                # 🔑 차이가 작으면 입 영역만 부드럽게 증폭
+                if avg_diff_mouth < 20.0:
+                    # 증폭 계수 조정 (1.5~2.2배) - 더 확실한 입 움직임
+                    amplify_factor = max(1.5, min(2.2, 35.0 / max(avg_diff_mouth, 1.0)))
+                    
+                    # 입 영역만 선택적 증폭 (마스크 생성)
+                    mouth_mask = np.zeros((256, 256), dtype=np.float32)
+                    mouth_y1, mouth_y2 = 155, 215
+                    mouth_x1, mouth_x2 = 83, 173
+                    
+                    # 🔑 더 좁은 그라디언트 마스크 (입 중앙 집중)
+                    for y in range(mouth_y1, mouth_y2):
+                        for x in range(mouth_x1, mouth_x2):
+                            # 중앙에서 멀어질수록 약해짐 (더 빠른 페이드)
+                            dy = (y - (mouth_y1 + mouth_y2) // 2) / ((mouth_y2 - mouth_y1) / 2)
+                            dx = (x - (mouth_x1 + mouth_x2) // 2) / ((mouth_x2 - mouth_x1) / 2)
+                            dist = np.sqrt(dx**2 + dy**2)
+                            # 0.8 → 1.2로 변경 (더 좁은 범위)
+                            mouth_mask[y, x] = max(0, 1.0 - dist * 1.2)
+                    
+                    # 입 영역만 증폭 적용
+                    diff_selective = diff.copy()
+                    for c in range(3):
+                        diff_selective[:, :, c] = diff[:, :, c] * (1.0 + (amplify_factor - 1.0) * mouth_mask)
+                    
+                    result_256 = np.clip(source_256.astype(np.float32) + diff_selective, 0, 255).astype(np.uint8)
+                    logger.info(f"🔊 입 영역 차이 증폭: {avg_diff_mouth:.1f} → x{amplify_factor:.2f} (선택적)")
+                else:
+                    logger.info(f"✅ VAE 출력 차이: 입 영역={avg_diff_mouth:.1f}, max={max_diff_mouth:.1f}")
 
-                        # 반환값 타입 확인 (디버깅)
-                        logger.debug(f"Face parser result type: {type(parsing_result)}")
-
-                        # int, None 등 유효하지 않은 반환값 처리
-                        if parsing_result is None or isinstance(parsing_result, (int, float, bool)):
-                            logger.debug(f"Face parser returned invalid type: {type(parsing_result)}")
-                            parsing_result = None
-
-                        if parsing_result is not None:
-                            # PIL Image → numpy array 변환
-                            if isinstance(parsing_result, Image.Image):
-                                parsing_array = np.array(parsing_result)
-                            elif isinstance(parsing_result, np.ndarray):
-                                parsing_array = parsing_result
-                            elif hasattr(parsing_result, '__array__'):
-                                parsing_array = np.array(parsing_result)
-                            else:
-                                logger.debug(f"Unknown parsing result type: {type(parsing_result)}")
-                                parsing_array = None
-
-                            # parsing_array가 유효한 경우에만 처리
-                            if parsing_array is not None and hasattr(parsing_array, 'shape') and len(parsing_array.shape) >= 2:
-                                # MuseTalk face parsing labels (raw mode):
-                                # 실제 반환값은 255 (face) vs 0 (background)
-                                # 입 영역만 추출하려면 하단 영역 마스크 생성
-                                lip_mask = np.zeros((256, 256), dtype=np.float32)
-                                # 얼굴 영역 (255) 확인
-                                face_mask = (parsing_array > 128).astype(np.float32)
-
-                                if np.sum(face_mask) > 1000:  # 얼굴이 감지된 경우
-                                    # 입 영역: 얼굴의 하단 50% 영역
-                                    h_mask = parsing_array.shape[0]
-                                    lip_region_start = int(h_mask * 0.5)
-                                    lip_mask[lip_region_start:, :] = face_mask[lip_region_start:, :]
-
-                                    # 마스크 확장 및 블러 (블러 감소로 선명한 효과)
-                                    if np.sum(lip_mask) > 100:
-                                        kernel = np.ones((3, 3), np.uint8)
-                                        lip_mask = cv2.dilate(lip_mask, kernel, iterations=1)
-                                        lip_mask = cv2.GaussianBlur(lip_mask, (11, 11), 0)
-                                        mask = lip_mask
-                                        logger.debug(f"Face parser mask created: {np.sum(mask > 0)} pixels")
-                    except Exception as e:
-                        logger.debug(f"Face parser mask skipped (using ellipse fallback): {e}")
-                        mask = None
-
-                # Face Parser 실패 시 간단한 타원형 마스크 사용
-                if mask is None:
-                    mask = np.zeros((256, 256), dtype=np.float32)
-                    # 입 위치 추정 (얼굴 크롭 기준)
-                    # 256x256 얼굴 크롭에서 입은 보통 y=160~210 영역 (턱 포함)
-                    # 마스크를 더 작고 정확한 입 영역에 집중
-                    center_x, center_y = 128, 185  # 입 중심 (약간 아래로)
-                    axes = (45, 30)  # 타원 크기 축소 - 입 영역만 정확히
-                    cv2.ellipse(mask, (center_x, center_y), axes, 0, 0, 360, 1.0, -1)
-                    # 가우시안 블러를 더 줄여서 선명한 효과
-                    mask = cv2.GaussianBlur(mask, (11, 11), 0)
-                    logger.debug(f"Using ellipse mask: center=({center_x},{center_y}), axes={axes}")
-
-                # 3채널로 확장
-                mask_3ch = np.stack([mask, mask, mask], axis=-1)
-
-                # 블렌딩 강도 조절 (0.0~1.0, 높을수록 립싱크 효과 강함)
-                blend_alpha = 0.85  # 85% 립싱크 결과 사용
-
-                # VAE 출력과 원본의 차이 로깅 (디버그용)
-                if logger.isEnabledFor(logging.DEBUG):
-                    diff = np.abs(result_256.astype(np.float32) - source_256.astype(np.float32))
-                    mouth_region_diff = diff[155:215, 83:173]  # 입 영역만
-                    avg_diff = np.mean(mouth_region_diff)
-                    logger.debug(f"VAE output mouth region diff from source: avg={avg_diff:.1f}")
-
-                # 블렌딩: 원본 * (1-mask*alpha) + 결과 * (mask*alpha)
-                effective_mask = mask_3ch * blend_alpha
-                blended_256 = (source_256.astype(np.float32) * (1 - effective_mask) +
-                               result_256.astype(np.float32) * effective_mask)
-                blended_256 = np.clip(blended_256, 0, 255).astype(np.uint8)
-
-                # 얼굴 bbox가 있으면 해당 영역에만 결과 적용
+                # =====================================================
+                # MuseTalk 원래 블렌딩 방식 사용
+                # =====================================================
+                from PIL import Image
+                
+                # 🔑 MuseTalk blending.py의 get_image_blending 방식 적용
+                # 원본 프레임과 VAE 출력을 PIL Image로 변환
+                body_pil = Image.fromarray(source_frame[:, :, ::-1])  # BGR to RGB
+                face_pil = Image.fromarray(result_256[:, :, ::-1])    # BGR to RGB
+                
                 if face_bbox is not None:
                     x1, y1, x2, y2 = face_bbox
-                    face_w, face_h = x2 - x1, y2 - y1
-
-                    # 결과를 원본 얼굴 크기로 리사이즈
-                    result_face = cv2.resize(blended_256, (face_w, face_h), interpolation=cv2.INTER_LINEAR)
-
-                    # 원본 프레임에 결과 페이스트
-                    result_frame = source_frame.copy()
-                    result_frame[y1:y2, x1:x2] = result_face
-
-                    logger.info(f"✅ MuseTalk lip sync SUCCESS: face bbox=({x1},{y1},{x2},{y2})")
+                    logger.info(f"🔍 Face bbox: ({x1}, {y1}, {x2}, {y2})")
+                    
+                    # MuseTalk 방식: Face Parser로 마스크 생성 (mode="jaw")
+                    mask_array = None
+                    
+                    # Face Parser 상태 추적
+                    face_parser_error_reason = None
+                    
+                    if self._face_parser is not None:
+                        logger.info("🔍 Face Parser 시작...")
+                        try:
+                            # 확장된 얼굴 영역 crop (expand=1.2)
+                            expand = 1.2
+                            x_c, y_c = (x1 + x2) // 2, (y1 + y2) // 2
+                            face_w, face_h = x2 - x1, y2 - y1
+                            s = int(max(face_w, face_h) // 2 * expand)
+                            
+                            # crop box 계산
+                            crop_x1 = max(0, x_c - s)
+                            crop_y1 = max(0, y_c - s)
+                            crop_x2 = min(source_frame.shape[1], x_c + s)
+                            crop_y2 = min(source_frame.shape[0], y_c + s)
+                            crop_box = (crop_x1, crop_y1, crop_x2, crop_y2)
+                            
+                            # 확장된 얼굴 영역 crop
+                            face_large = body_pil.crop(crop_box)
+                            ori_shape = face_large.size
+                            
+                            logger.debug(f"Face Parser 입력: size={ori_shape}, mode=jaw")
+                            
+                            # Face Parser로 마스크 생성 (mode="jaw" 사용!)
+                            seg_image = self._face_parser(face_large, mode="jaw")
+                            
+                            if seg_image is not None:
+                                logger.info(f"🔍 Face Parser 출력: type={type(seg_image).__name__}, size={seg_image.size if hasattr(seg_image, 'size') else 'N/A'}")
+                                seg_image = seg_image.resize(ori_shape)
+                                
+                                # face_box 영역만 추출
+                                mask_small = seg_image.crop((
+                                    x1 - crop_x1, y1 - crop_y1,
+                                    x2 - crop_x1, y2 - crop_y1
+                                ))
+                                
+                                # 전체 마스크 생성
+                                mask_image = Image.new('L', ori_shape, 0)
+                                mask_image.paste(mask_small, (x1 - crop_x1, y1 - crop_y1))
+                                
+                                # 상단 50% 제거 (입만 남김) - MuseTalk upper_boundary_ratio=0.5
+                                width, height = mask_image.size
+                                top_boundary = int(height * 0.5)
+                                modified_mask = Image.new('L', ori_shape, 0)
+                                modified_mask.paste(
+                                    mask_image.crop((0, top_boundary, width, height)),
+                                    (0, top_boundary)
+                                )
+                                
+                                # 🔑 가우시안 블러 감소 (입 선명도 향상)
+                                # 이전: 0.1 * size (너무 큼) → 이후: 0.03 * size (더 선명)
+                                blur_size = max(3, int(0.03 * ori_shape[0] // 2 * 2) + 1)
+                                if blur_size % 2 == 0:
+                                    blur_size += 1  # 홀수로 만들기
+                                mask_array = cv2.GaussianBlur(
+                                    np.array(modified_mask),
+                                    (blur_size, blur_size), 0
+                                )
+                                
+                                # 🔑 마스크 최대값 제한 (자연스러운 블렌딩)
+                                mask_array = np.clip(mask_array, 0, 180)
+                                
+                                # 마스크 유효 픽셀 수 확인
+                                valid_pixels = np.sum(mask_array > 0)
+                                if valid_pixels < 100:
+                                    face_parser_error_reason = f"마스크 픽셀 부족 ({valid_pixels}개)"
+                                    mask_array = None
+                                else:
+                                    logger.info(f"✅ Face Parser 성공: blur={blur_size}, pixels={valid_pixels}, max={np.max(mask_array):.0f}")
+                            else:
+                                face_parser_error_reason = "Face Parser가 None 반환"
+                                logger.error("❌ Face Parser가 None 반환!")
+                                mask_array = None
+                        except Exception as e:
+                            face_parser_error_reason = f"예외 발생: {str(e)}"
+                            import traceback
+                            logger.error(f"❌ Face Parser 예외: {e}")
+                            logger.error(traceback.format_exc())
+                            mask_array = None
+                    else:
+                        face_parser_error_reason = "Face Parser 모델이 로드되지 않음"
+                        logger.error("❌ Face Parser 모델이 로드되지 않음!")
+                    
+                    # Face Parser 실패 시 MuseTalk 스타일 폴백 마스크
+                    if mask_array is None:
+                        logger.error("=" * 60)
+                        logger.error("❌ FACE PARSER 실패 - 폴백 마스크 사용")
+                        logger.error(f"   원인: {face_parser_error_reason}")
+                        logger.error("   해결방법:")
+                        logger.error("   1. models/face-parse-bisent/79999_iter.pth 확인")
+                        logger.error("   2. models/face-parse-bisent/resnet18-5c106cde.pth 확인")
+                        logger.error("=" * 60)
+                        
+                        expand = 1.2
+                        x_c, y_c = (x1 + x2) // 2, (y1 + y2) // 2
+                        face_w, face_h = x2 - x1, y2 - y1
+                        s = int(max(face_w, face_h) // 2 * expand)
+                        
+                        crop_x1 = max(0, x_c - s)
+                        crop_y1 = max(0, y_c - s)
+                        crop_x2 = min(source_frame.shape[1], x_c + s)
+                        crop_y2 = min(source_frame.shape[0], y_c + s)
+                        crop_box = (crop_x1, crop_y1, crop_x2, crop_y2)
+                        
+                        face_large = body_pil.crop(crop_box)
+                        ori_shape = face_large.size
+                        
+                        # 🔑 수정: 입 영역만 작은 마스크 (전체 하단 X)
+                        mask_h, mask_w = ori_shape[1], ori_shape[0]
+                        mask_array = np.zeros((mask_h, mask_w), dtype=np.uint8)
+                        
+                        # 얼굴 영역의 상대 위치 계산
+                        rel_x1 = x1 - crop_x1
+                        rel_y1 = y1 - crop_y1
+                        rel_x2 = x2 - crop_x1
+                        rel_y2 = y2 - crop_y1
+                        
+                        # 🔑 입 영역만 마스크 (얼굴 하단 25%만, 폭 40%)
+                        face_height = rel_y2 - rel_y1
+                        face_width = rel_x2 - rel_x1
+                        
+                        # 입 위치: 얼굴 하단 60-85% 영역 (더 정확한 입 위치)
+                        mouth_y_start = rel_y1 + int(face_height * 0.60)
+                        mouth_y_end = rel_y1 + int(face_height * 0.85)
+                        
+                        # 입 폭: 얼굴 폭의 40%
+                        mouth_x_center = (rel_x1 + rel_x2) // 2
+                        mouth_half_width = int(face_width * 0.20)
+                        mouth_x_start = max(0, mouth_x_center - mouth_half_width)
+                        mouth_x_end = min(mask_w, mouth_x_center + mouth_half_width)
+                        
+                        # 타원형 마스크 생성 (더 자연스러움)
+                        mouth_center_y = (mouth_y_start + mouth_y_end) // 2
+                        mouth_radius_y = (mouth_y_end - mouth_y_start) // 2
+                        mouth_radius_x = mouth_half_width
+                        
+                        for y in range(mouth_y_start, mouth_y_end):
+                            for x in range(mouth_x_start, mouth_x_end):
+                                # 타원 거리 계산
+                                dy = (y - mouth_center_y) / max(1, mouth_radius_y)
+                                dx = (x - mouth_x_center) / max(1, mouth_radius_x)
+                                dist = np.sqrt(dx**2 + dy**2)
+                                
+                                if dist <= 1.0:
+                                    # 중앙에서 멀어질수록 페이드
+                                    intensity = int(200 * (1.0 - dist * 0.5))  # 최대 200
+                                    mask_array[y, x] = max(mask_array[y, x], intensity)
+                        
+                        # 🔑 블러 감소 (입 선명도 향상)
+                        blur_size = max(3, int(0.03 * ori_shape[0] // 2 * 2) + 1)
+                        if blur_size % 2 == 0:
+                            blur_size += 1  # 홀수로 만들기
+                        mask_array = cv2.GaussianBlur(mask_array, (blur_size, blur_size), 0)
+                        
+                        # 🔑 마스크 최대값 제한 (더 보수적으로 - 150)
+                        mask_array = np.clip(mask_array, 0, 150)
+                    
+                    # =====================================================
+                    # MuseTalk get_image_blending 방식으로 블렌딩
+                    # =====================================================
+                    # VAE 출력을 원본 얼굴 크기로 리사이즈
+                    result_face = cv2.resize(result_256, (x2 - x1, y2 - y1), interpolation=cv2.INTER_LINEAR)
+                    result_face_pil = Image.fromarray(result_face[:, :, ::-1])
+                    
+                    # face_large에 result_face 붙이기
+                    face_large.paste(result_face_pil, (x1 - crop_x1, y1 - crop_y1))
+                    
+                    # 마스크를 이용해 body에 블렌딩
+                    mask_pil = Image.fromarray(mask_array).convert("L")
+                    
+                    # 마스크 통계 로깅
+                    mask_min = np.min(mask_array)
+                    mask_max = np.max(mask_array)
+                    mask_mean = np.mean(mask_array)
+                    mask_nonzero = np.count_nonzero(mask_array)
+                    logger.info(f"🎭 블렌딩 마스크: min={mask_min}, max={mask_max}, mean={mask_mean:.1f}, nonzero={mask_nonzero}")
+                    
+                    body_pil.paste(face_large, (crop_x1, crop_y1), mask_pil)
+                    
+                    # numpy로 변환
+                    result_frame = np.array(body_pil)[:, :, ::-1]  # RGB to BGR
+                    
+                    logger.info(f"✅ MuseTalk lip sync SUCCESS: output shape={result_frame.shape}")
                     return result_frame
+
+                # 얼굴 bbox가 없는 경우 (폴백) - 전체 프레임에 VAE 출력 적용
                 else:
-                    # 얼굴 감지 실패 시 전체 프레임 리사이즈
-                    result_frame = cv2.resize(blended_256, (w, h), interpolation=cv2.INTER_LINEAR)
+                    logger.error("❌ face_bbox가 None - 얼굴 감지 실패! 전체 프레임에 VAE 적용")
+                    result_frame = cv2.resize(result_256, (w, h), interpolation=cv2.INTER_LINEAR)
 
                     if result_frame is not None and result_frame.shape[:2] == (h, w):
                         logger.info(f"✅ MuseTalk lip sync SUCCESS: output shape={result_frame.shape}")
@@ -707,19 +841,27 @@ class MuseTalkModel:
         """
         오디오에서 특징 추출 (MuseTalk 방식: Whisper encoder 사용)
         
+        MuseTalk 원본 형태: [batch, 50, 384]
+        - 50 = 10 time steps × 5 whisper layers
+        - 384 = hidden dimension
+        
         Args:
             audio: 오디오 배열 (float32, [-1, 1])
             sample_rate: 오디오 샘플레이트
             
         Returns:
-            Whisper encoder hidden states (torch.Tensor)
+            Whisper encoder hidden states (torch.Tensor) [batch, 50, 384]
         """
         import torch
+        from einops import rearrange
+
+        device_obj = torch.device(self.device if torch.cuda.is_available() else "cpu")
+        TARGET_SEQ_LEN = 50  # MuseTalk 기대 형태: [batch, 50, 384]
+        HIDDEN_DIM = 384
 
         if self._audio_processor is None:
-            # 폴백: 간단한 특징 추출
-            features = self._simple_audio_features(audio, sample_rate)
-            return torch.from_numpy(features).to(self.device).unsqueeze(0)
+            logger.warning("⚠️ AudioProcessor가 없어서 폴백 특징 사용")
+            return self._generate_fallback_features(device_obj, TARGET_SEQ_LEN, HIDDEN_DIM)
 
         try:
             import librosa
@@ -728,34 +870,14 @@ class MuseTalkModel:
             if sample_rate != 16000:
                 audio = librosa.resample(audio, orig_sr=sample_rate, target_sr=16000)
             
-            # 실시간 처리를 위한 오디오 버퍼링
-            # MuseTalk은 여러 프레임의 오디오를 함께 처리하므로, 버퍼 유지 필요
-            self._audio_buffer.append(audio.copy())
-            
-            # 버퍼 크기 제한 (메모리 관리)
-            total_length = sum(len(chunk) for chunk in self._audio_buffer)
-            while total_length > self._audio_buffer_size:
-                if len(self._audio_buffer) > 0:
-                    removed = self._audio_buffer.pop(0)
-                    total_length -= len(removed)
-            
-            # 버퍼 결합 (최근 오디오들 사용)
-            if len(self._audio_buffer) > 1:
-                audio_combined = np.concatenate(self._audio_buffer)
-            else:
-                audio_combined = audio
-            
-            # 최소 길이 보장 (Whisper 요구사항)
-            min_length = 16000 * 0.5  # 최소 0.5초
-            if len(audio_combined) < min_length:
-                # 패딩 추가
-                padding_length = int(min_length - len(audio_combined))
-                audio_combined = np.pad(audio_combined, (0, padding_length), mode='constant', constant_values=0)
+            # 최소 길이 보장 (Whisper 요구사항: 최소 0.5초)
+            min_length = int(16000 * 0.5)
+            if len(audio) < min_length:
+                audio = np.pad(audio, (0, min_length - len(audio)), mode='constant', constant_values=0)
             
             # Whisper feature extractor로 mel spectrogram 추출
-            device_obj = torch.device(self.device if torch.cuda.is_available() else "cpu")
             audio_feature = self._audio_processor.feature_extractor(
-                audio_combined,
+                audio,
                 return_tensors="pt",
                 sampling_rate=16000
             ).input_features
@@ -764,59 +886,129 @@ class MuseTalkModel:
             if self._weight_dtype:
                 audio_feature = audio_feature.to(dtype=self._weight_dtype)
             
-            # Whisper encoder로 hidden states 추출 (실제 MuseTalk 방식)
+            # Whisper encoder로 hidden states 추출
             if self._whisper is not None:
                 with torch.no_grad():
-                    audio_feats = self._whisper.encoder(
+                    encoder_output = self._whisper.encoder(
                         audio_feature, 
                         output_hidden_states=True
-                    ).hidden_states
+                    )
                     
-                    # 모든 레이어의 hidden states를 스택 (MuseTalk 방식)
-                    audio_feats = torch.stack(audio_feats, dim=2)  # [batch, seq_len, num_layers, hidden_dim]
+                    hidden_states = encoder_output.hidden_states
+                    # hidden_states는 tuple: (layer0, layer1, ..., layerN)
+                    # 각 레이어: [batch, seq_len, hidden_dim]
                     
-                    # MuseTalk 형식으로 변환
-                    # get_whisper_chunk에서는 더 복잡한 처리를 하지만,
-                    # 실시간 처리를 위해 간단히 처리
-                    b, seq_len, num_layers, hidden_dim = audio_feats.shape
+                    num_layers = len(hidden_states)
                     
-                    # 실시간 처리: 마지막 타임스텝만 사용하거나 평균 사용
-                    if seq_len > 1:
-                        # 여러 타임스텝이 있으면 평균 사용
-                        audio_feats = audio_feats.mean(dim=1, keepdim=True)  # [batch, 1, num_layers, hidden_dim]
+                    # 첫 번째 레이어 형태 확인
+                    first_layer = hidden_states[0]
+                    batch_size, seq_len, hidden_dim = first_layer.shape
                     
-                    # 형태 조정: [batch, 1, num_layers, hidden_dim] -> [batch, num_layers, hidden_dim]
-                    audio_feats = audio_feats.squeeze(1)  # [batch, num_layers, hidden_dim]
+                    logger.info(f"🎤 Whisper: {num_layers} layers, seq_len={seq_len}, hidden_dim={hidden_dim}")
                     
-                    # MuseTalk 방식: 모든 레이어의 hidden states를 스택
-                    # [batch, seq_len, num_layers, hidden_dim]
-                    # MuseTalk의 get_whisper_chunk에서는 이 형태를 [batch, (c h) w]로 변환
-                    # 여기서는 실시간 처리를 위해 간단화
-                    # 실제로는 여러 프레임의 오디오를 버퍼링하여 처리해야 하지만,
-                    # 여기서는 마지막 레이어의 hidden state만 사용 (384 차원)
-                    # 또는 모든 레이어의 평균 사용
+                    # MuseTalk은 5개 레이어 × 10 time steps = 50 사용
+                    # Whisper-tiny는 5개 레이어 (embedding + 4 encoder layers)
+                    target_layers = 5
+                    target_time_steps = 10
                     
-                    # 마지막 레이어만 사용 (hidden_dim = 384)
-                    audio_feats_last = audio_feats[:, -1, :]  # [batch, hidden_dim]
+                    # 레이어 선택 (마지막 5개 또는 가능한 만큼)
+                    if num_layers >= target_layers:
+                        selected_layers = hidden_states[-target_layers:]
+                    else:
+                        # 레이어 수가 부족하면 반복 패딩
+                        selected_layers = list(hidden_states)
+                        while len(selected_layers) < target_layers:
+                            selected_layers.append(hidden_states[-1])  # 마지막 레이어 반복
+                        selected_layers = selected_layers[:target_layers]
                     
-                    # 또는 모든 레이어의 평균 사용
-                    # audio_feats_last = audio_feats.mean(dim=1)  # [batch, hidden_dim]
+                    num_selected = len(selected_layers)
+                    logger.debug(f"Selected {num_selected} layers for audio features")
                     
-                    # PositionalEncoding을 위한 형태: [batch, 1, hidden_dim]
-                    audio_feats_last = audio_feats_last.unsqueeze(1)  # [batch, 1, 384]
+                    # 🔑 오디오 에너지 기반 위치 선택 (보수적으로)
+                    # 오디오 에너지가 높을수록 다른 위치 선택 (lip movement variation)
+                    audio_energy = float(np.sqrt(np.mean(audio ** 2)))
                     
-                    return audio_feats_last
+                    # 에너지를 0~1로 정규화 (0.001~0.3 범위 가정)
+                    energy_normalized = min(1.0, max(0.0, (audio_energy - 0.001) / 0.3))
+                    
+                    # 에너지에 따라 시작 위치 결정 (시간적 다양성 추가)
+                    if seq_len >= target_time_steps:
+                        # 중앙 기준으로 변동
+                        center = seq_len // 2
+                        # 에너지와 작은 랜덤 오프셋으로 위치 다양화
+                        import random
+                        random_offset = random.randint(-20, 20)  # 작은 랜덤 변화
+                        energy_offset = int(energy_normalized * (seq_len - target_time_steps) * 0.3)
+                        position_offset = energy_offset + random_offset
+                        start_idx = max(0, min(seq_len - target_time_steps, center - target_time_steps // 2 + position_offset))
+                        end_idx = start_idx + target_time_steps
+                        
+                        layer_features = []
+                        for layer in selected_layers:
+                            layer_slice = layer[:, start_idx:end_idx, :]  # [batch, 10, hidden_dim]
+                            # 🔑 오디오 에너지 기반 스케일링 (1.0 ~ 1.8) - 입 움직임 강조
+                            scale_factor = 1.0 + energy_normalized * 0.8
+                            layer_slice = layer_slice * scale_factor
+                            layer_features.append(layer_slice)
+                        
+                        logger.debug(f"Audio energy={audio_energy:.4f}, norm={energy_normalized:.2f}, scale={scale_factor:.2f}, pos={start_idx}")
+                    else:
+                        # seq_len이 부족하면 반복 패딩으로 확장
+                        layer_features = []
+                        scale_factor = 1.0 + energy_normalized * 0.8  # 에너지 기반 스케일링
+                        for layer in selected_layers:
+                            repeat_times = (target_time_steps + seq_len - 1) // seq_len
+                            layer_repeated = layer.repeat(1, repeat_times, 1)[:, :target_time_steps, :]
+                            layer_repeated = layer_repeated * scale_factor
+                            layer_features.append(layer_repeated)
+                    
+                    # 레이어들을 결합: [batch, 10, 384] × 5 -> [batch, 50, 384]
+                    stacked = torch.stack(layer_features, dim=2)  # [batch, 10, 5, hidden_dim]
+                    audio_feats_final = rearrange(stacked, 'b t l h -> b (t l) h')  # [batch, 50, hidden_dim]
+                    
+                    # hidden_dim이 384가 아니면 조정
+                    if hidden_dim != HIDDEN_DIM:
+                        logger.warning(f"Hidden dim mismatch: {hidden_dim} vs {HIDDEN_DIM}, padding/truncating")
+                        if hidden_dim < HIDDEN_DIM:
+                            # 패딩
+                            padding = torch.zeros(batch_size, audio_feats_final.shape[1], HIDDEN_DIM - hidden_dim, 
+                                                device=device_obj, dtype=audio_feats_final.dtype)
+                            audio_feats_final = torch.cat([audio_feats_final, padding], dim=2)
+                        else:
+                            # 잘라내기
+                            audio_feats_final = audio_feats_final[:, :, :HIDDEN_DIM]
+                    
+                    # seq_len 조정 (50 보장)
+                    if audio_feats_final.shape[1] < TARGET_SEQ_LEN:
+                        padding_size = TARGET_SEQ_LEN - audio_feats_final.shape[1]
+                        padding = audio_feats_final[:, :padding_size, :].clone()
+                        audio_feats_final = torch.cat([audio_feats_final, padding], dim=1)
+                    elif audio_feats_final.shape[1] > TARGET_SEQ_LEN:
+                        audio_feats_final = audio_feats_final[:, :TARGET_SEQ_LEN, :]
+                    
+                    logger.info(f"✅ Audio features: {audio_feats_final.shape}")  # [1, 50, 384]
+                    return audio_feats_final
             else:
-                # Whisper 없으면 feature_extractor 출력만 사용
-                return audio_feature
+                logger.error("❌ Whisper encoder가 로드되지 않음!")
+                logger.error("   해결 방법: 서버 재시작 또는 Whisper 모델 확인")
+                return self._generate_fallback_features(device_obj, TARGET_SEQ_LEN, HIDDEN_DIM)
                 
         except Exception as e:
-            logger.warning(f"Audio feature extraction failed: {e}, using fallback")
+            logger.error(f"Audio feature extraction failed: {e}")
             import traceback
-            logger.debug(traceback.format_exc())
-            # 폴백: 간단한 특징 추출
-            features = self._simple_audio_features(audio, sample_rate)
-            return torch.from_numpy(features).to(self.device).unsqueeze(0)
+            logger.error(traceback.format_exc())
+            return self._generate_fallback_features(device_obj, TARGET_SEQ_LEN, HIDDEN_DIM)
+    
+    def _generate_fallback_features(self, device, seq_len: int = 50, hidden_dim: int = 384) -> "torch.Tensor":
+        """폴백 오디오 특징 생성 (립싱크가 작동하지 않음 - 중립 포즈)"""
+        import torch
+        # 중립 포즈를 위해 0으로 채움 (랜덤 노이즈 대신)
+        # 이렇게 하면 최소한 입이 이상하게 움직이지는 않음
+        logger.warning("⚠️ 폴백 특징 사용 중 - 립싱크 비활성화 (중립 포즈)")
+        fallback = torch.zeros(1, seq_len, hidden_dim, device=device)
+        if self._weight_dtype:
+            fallback = fallback.to(dtype=self._weight_dtype)
+        return fallback
 
     def _simple_audio_features(
         self,
@@ -853,7 +1045,7 @@ class MuseTalkModel:
         frame: np.ndarray,
     ) -> Optional[Tuple[int, int, int, int]]:
         """
-        MediaPipe로 얼굴 영역 감지
+        MediaPipe로 얼굴 영역 감지 (tasks API 우선, solutions API 폴백)
 
         Args:
             frame: 입력 프레임 (BGR)
@@ -862,56 +1054,131 @@ class MuseTalkModel:
             (x1, y1, x2, y2) 얼굴 bounding box 또는 None
         """
         import cv2
+        import os
+        import urllib.request
+
+        h, w = frame.shape[:2]
 
         try:
             import mediapipe as mp
-
-            mp_face_detection = mp.solutions.face_detection
-
-            with mp_face_detection.FaceDetection(
-                model_selection=1,  # 0: 2m 이내, 1: 5m 이내
-                min_detection_confidence=0.5
-            ) as face_detection:
-                h, w = frame.shape[:2]
+            
+            # ========================================
+            # 1. tasks API 사용 (MediaPipe 0.10.0+)
+            # ========================================
+            try:
+                from mediapipe.tasks.python import vision
+                from mediapipe.tasks.python.core import base_options
+                
+                # 모델 파일 다운로드 (없으면)
+                model_path = Path("models/face_detection_short_range.tflite")
+                model_path.parent.mkdir(parents=True, exist_ok=True)
+                
+                if not model_path.exists():
+                    logger.info("📥 Face detection 모델 다운로드 중...")
+                    url = "https://storage.googleapis.com/mediapipe-models/face_detector/blaze_face_short_range/float16/1/blaze_face_short_range.tflite"
+                    urllib.request.urlretrieve(url, str(model_path))
+                    logger.info(f"✅ 모델 다운로드 완료: {model_path}")
+                
+                base_opts = base_options.BaseOptions(model_asset_path=str(model_path))
+                options = vision.FaceDetectorOptions(
+                    base_options=base_opts,
+                    min_detection_confidence=0.3  # 낮은 신뢰도로 설정
+                )
+                
+                detector = vision.FaceDetector.create_from_options(options)
+                
                 rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                results = face_detection.process(rgb_frame)
+                mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb_frame)
+                
+                result = detector.detect(mp_image)
+                detector.close()
+                
+                if result.detections:
+                    detection = result.detections[0]
+                    bbox = detection.bounding_box
+                    score = detection.categories[0].score if detection.categories else 0
+                    
+                    # 절대 좌표
+                    x1 = bbox.origin_x
+                    y1 = bbox.origin_y
+                    face_w = bbox.width
+                    face_h = bbox.height
+                    
+                    # 패딩 추가
+                    pad = int(0.2 * max(face_w, face_h))
+                    x1 = max(0, x1 - pad)
+                    y1 = max(0, y1 - pad)
+                    x2 = min(w, x1 + face_w + 2 * pad)
+                    y2 = min(h, y1 + face_h + 2 * pad)
+                    
+                    # 정사각형에 가깝게 조정
+                    size = max(x2 - x1, y2 - y1)
+                    center_x = (x1 + x2) // 2
+                    center_y = (y1 + y2) // 2
+                    x1 = max(0, center_x - size // 2)
+                    y1 = max(0, center_y - size // 2)
+                    x2 = min(w, x1 + size)
+                    y2 = min(h, y1 + size)
+                    
+                    logger.info(f"✅ Face detected (tasks API): bbox=({x1},{y1},{x2},{y2}), score={score:.3f}")
+                    return (int(x1), int(y1), int(x2), int(y2))
+                else:
+                    logger.warning(f"⚠️ MediaPipe Tasks: 얼굴을 찾지 못함 (frame: {w}x{h})")
+                    
+            except Exception as e:
+                logger.warning(f"⚠️ Tasks API 실패: {e}")
+            
+            # ========================================
+            # 2. solutions API 폴백 (이전 버전)
+            # ========================================
+            if hasattr(mp, 'solutions'):
+                mp_face_detection = mp.solutions.face_detection
 
-                if not results.detections:
-                    return None
+                with mp_face_detection.FaceDetection(
+                    model_selection=1,
+                    min_detection_confidence=0.3
+                ) as face_detection:
+                    rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                    results = face_detection.process(rgb_frame)
 
-                # 가장 큰 얼굴 선택 (여러 얼굴이 있을 경우)
-                detection = results.detections[0]
-                bbox = detection.location_data.relative_bounding_box
+                    if results.detections:
+                        detection = results.detections[0]
+                        bbox = detection.location_data.relative_bounding_box
+                        score = detection.score[0] if detection.score else 0
 
-                # 상대 좌표를 절대 좌표로 변환
-                x1 = int(bbox.xmin * w)
-                y1 = int(bbox.ymin * h)
-                face_w = int(bbox.width * w)
-                face_h = int(bbox.height * h)
+                        x1 = int(bbox.xmin * w)
+                        y1 = int(bbox.ymin * h)
+                        face_w = int(bbox.width * w)
+                        face_h = int(bbox.height * h)
 
-                # 패딩 추가 (얼굴 주변 여유 공간)
-                pad = int(0.3 * max(face_w, face_h))
-                x1 = max(0, x1 - pad)
-                y1 = max(0, y1 - pad)
-                x2 = min(w, x1 + face_w + 2 * pad)
-                y2 = min(h, y1 + face_h + 2 * pad)
+                        pad = int(0.2 * max(face_w, face_h))
+                        x1 = max(0, x1 - pad)
+                        y1 = max(0, y1 - pad)
+                        x2 = min(w, x1 + face_w + 2 * pad)
+                        y2 = min(h, y1 + face_h + 2 * pad)
 
-                # 정사각형에 가깝게 조정
-                size = max(x2 - x1, y2 - y1)
-                center_x = (x1 + x2) // 2
-                center_y = (y1 + y2) // 2
-                x1 = max(0, center_x - size // 2)
-                y1 = max(0, center_y - size // 2)
-                x2 = min(w, x1 + size)
-                y2 = min(h, y1 + size)
+                        size = max(x2 - x1, y2 - y1)
+                        center_x = (x1 + x2) // 2
+                        center_y = (y1 + y2) // 2
+                        x1 = max(0, center_x - size // 2)
+                        y1 = max(0, center_y - size // 2)
+                        x2 = min(w, x1 + size)
+                        y2 = min(h, y1 + size)
 
-                return (x1, y1, x2, y2)
+                        logger.info(f"✅ Face detected (solutions API): bbox=({x1},{y1},{x2},{y2}), score={score:.3f}")
+                        return (x1, y1, x2, y2)
+                    else:
+                        logger.warning(f"⚠️ MediaPipe Solutions: 얼굴을 찾지 못함 (frame: {w}x{h})")
+            
+            return None
 
         except ImportError:
-            logger.debug("MediaPipe not installed, face detection unavailable")
+            logger.error("❌ MediaPipe not installed!")
             return None
         except Exception as e:
-            logger.debug(f"Face detection failed: {e}")
+            logger.error(f"❌ Face detection failed: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
             return None
 
     def _preprocess_face(
@@ -925,7 +1192,60 @@ class MuseTalkModel:
         try:
             # MediaPipe로 얼굴 감지
             import mediapipe as mp
+            from mediapipe.tasks.python import vision
+            from mediapipe.tasks.python.core import base_options
+            from mediapipe.tasks.python.vision.core import vision_task_running_mode, image as mp_image
 
+            # MediaPipe 0.10.0+ tasks API 사용 시도
+            if not hasattr(mp, 'solutions'):
+                # tasks API 사용
+                try:
+                    base_opts = base_options.BaseOptions(
+                        model_asset_path=None,
+                        delegate=base_options.BaseOptions.Delegate.CPU
+                    )
+                    options = vision.FaceDetectorOptions(
+                        base_options=base_opts,
+                        running_mode=vision_task_running_mode.VisionTaskRunningMode.IMAGE,
+                        min_detection_confidence=0.5
+                    )
+                    face_detector = vision.FaceDetector.create_from_options(options)
+
+                    rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                    mp_img = mp_image.Image(image_format=mp_image.ImageFormat.SRGB, data=rgb_frame)
+                    detection_result = face_detector.detect(mp_img)
+
+                    if not detection_result.detections:
+                        face_detector.close()
+                        return None, None
+
+                    detection = detection_result.detections[0]
+                    bbox = detection.bounding_box
+
+                    h, w = frame.shape[:2]
+                    x1 = bbox.origin_x
+                    y1 = bbox.origin_y
+                    x2 = x1 + bbox.width
+                    y2 = y1 + bbox.height
+
+                    # 패딩 추가
+                    pad = int(0.2 * max(bbox.width, bbox.height))
+                    x1 = max(0, x1 - pad)
+                    y1 = max(0, y1 - pad)
+                    x2 = min(w, x2 + pad)
+                    y2 = min(h, y2 + pad)
+
+                    face_region = frame[y1:y2, x1:x2]
+                    face_crop = cv2.resize(face_region, (256, 256))
+
+                    face_detector.close()
+                    return torch.from_numpy(face_crop).permute(2, 0, 1).unsqueeze(0).float() / 255.0, (x1, y1, x2, y2)
+
+                except Exception as e:
+                    logger.debug(f"Face preprocessing (tasks API) failed: {e}, using fallback")
+                    return None, None
+
+            # solutions API 사용
             mp_face_detection = mp.solutions.face_detection
 
             with mp_face_detection.FaceDetection(

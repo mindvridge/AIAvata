@@ -55,6 +55,7 @@ class TTSCacheService:
         # Redis 클라이언트
         self._redis = None
         self._initialized = False
+        self._redis_enabled = False  # Redis 활성화 여부
 
         # 통계
         self._stats = {
@@ -71,6 +72,9 @@ class TTSCacheService:
         logger.info("Initializing TTS Cache Service...")
 
         if self.redis_url:
+            # 기본값인 localhost Redis는 선택적이므로 연결 실패 시 INFO 레벨
+            is_default_redis = self.redis_url.startswith("redis://localhost") or self.redis_url.startswith("redis://127.0.0.1")
+            
             try:
                 import redis.asyncio as redis
 
@@ -78,18 +82,34 @@ class TTSCacheService:
                     self.redis_url,
                     encoding="utf-8",
                     decode_responses=False,
+                    socket_connect_timeout=2,  # 연결 타임아웃 2초
                 )
-                await self._redis.ping()
-                logger.info("Redis cache connected")
+                await asyncio.wait_for(self._redis.ping(), timeout=2.0)
+                self._redis_enabled = True
+                logger.info(f"Redis cache connected: {self.redis_url}")
 
             except ImportError:
-                logger.warning("Redis package not installed. Using memory cache only.")
-            except Exception as e:
-                logger.warning(f"Redis connection failed: {e}. Using memory cache only.")
+                if not is_default_redis:
+                    logger.warning("Redis package not installed. Using memory cache only.")
+                else:
+                    logger.info("Redis package not installed. Using memory cache only.")
+            except asyncio.TimeoutError:
+                if not is_default_redis:
+                    logger.warning(f"Redis connection timeout: {self.redis_url}. Using memory cache only.")
+                else:
+                    logger.info("Redis not available (using memory cache only). To enable Redis, start a Redis server.")
                 self._redis = None
+            except Exception as e:
+                if not is_default_redis:
+                    logger.warning(f"Redis connection failed: {e}. Using memory cache only.")
+                else:
+                    logger.info(f"Redis not available: {e}. Using memory cache only. To enable Redis, start a Redis server at {self.redis_url}")
+                self._redis = None
+        else:
+            logger.info("Redis URL not configured. Using memory cache only.")
 
         self._initialized = True
-        logger.info("TTS Cache Service initialized")
+        logger.info("TTS Cache Service initialized (memory cache)")
 
     def _generate_cache_key(
         self,

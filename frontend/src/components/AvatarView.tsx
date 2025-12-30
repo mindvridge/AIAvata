@@ -17,6 +17,7 @@ interface AvatarViewProps {
   videoTrack?: MediaStreamTrack | null;
   frameData?: ArrayBuffer | null;  // WebSocket에서 받은 비디오 프레임 데이터
   onFrameData?: (data: ArrayBuffer) => void;
+  onRecordingStateChange?: (isRecording: boolean) => void; // 녹화 상태 변경 콜백 (선택적)
   width?: number;
   height?: number;
 }
@@ -49,13 +50,16 @@ export function AvatarView({
   videoTrack = null,
   frameData = null,
   onFrameData,
+  onRecordingStateChange,
   width = 512,
   height = 512,
 }: AvatarViewProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
+  const localVideoRef = useRef<HTMLVideoElement>(null); // 로컬 idle 루프 비디오
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [useCanvas, setUseCanvas] = useState(!videoTrack);
   const canvasInitialized = useRef(false);
+  const [useLocalVideo, setUseLocalVideo] = useState(false); // 로컬 비디오 사용 여부
 
   // Attach video track to video element
   useEffect(() => {
@@ -64,10 +68,88 @@ export function AvatarView({
       videoRef.current.srcObject = stream;
       videoRef.current.play().catch(console.error);
       setUseCanvas(false);
+      setUseLocalVideo(false);
     } else {
       setUseCanvas(true);
     }
   }, [videoTrack]);
+
+  // 로컬 비디오 재생 관리: idle 상태일 때만 재생, speaking/processing 상태일 때 일시정지
+  useEffect(() => {
+    if (!localVideoRef.current || !isConnected) return;
+
+    const localVideo = localVideoRef.current;
+    const currentEmotion = emotion || 'neutral';
+    const videoUrl = `/idle-loops/${currentEmotion}.mp4`; // 감정에 따라 변경 가능
+    
+    // WebSocket 프레임이 없을 때 로컬 비디오 재생 (idle, processing, listening 등)
+    // speaking 상태일 때는 TTS 오디오와 함께 프레임이 올 수 있으므로 프레임이 없을 때만 재생
+    const shouldPlayLocal = !frameData && (pipelineState === 'idle' || pipelineState === 'processing' || pipelineState === 'listening');
+    
+    if (shouldPlayLocal && !useLocalVideo) {
+      console.log(`%c🎬 로컬 비디오 재생 시작 시도: ${currentEmotion}`, 'color: blue; font-weight: bold');
+      
+      // 먼저 캐시된 idle 비디오 확인
+      import('../utils/idleVideoCache').then(({ getCachedIdleVideo }) => {
+        return getCachedIdleVideo(currentEmotion);
+      }).then((cachedVideoBlob) => {
+        if (cachedVideoBlob) {
+          // 캐시된 비디오 파일 재생
+          const blobUrl = URL.createObjectURL(cachedVideoBlob);
+          localVideo.src = blobUrl;
+          localVideo.loop = true;
+          localVideo.muted = true;
+          return localVideo.play().then(() => {
+            setUseLocalVideo(true); // 재생 성공 후 상태 업데이트
+            console.log(`%c✅ 캐시된 idle 비디오 재생 시작: ${currentEmotion}`, 'color: green; font-weight: bold');
+          }).catch((err) => {
+            console.error(`%c❌ 캐시된 비디오 재생 실패:`, 'color: red; font-weight: bold', err);
+            URL.revokeObjectURL(blobUrl);
+          });
+        } else {
+          // 캐시가 없으면 파일 확인 후 재생 시도
+          console.log(`%c📁 로컬 파일 확인 중: ${videoUrl}`, 'color: blue; font-weight: bold');
+          return fetch(videoUrl, { method: 'HEAD' })
+            .then((response) => {
+              if (response.ok) {
+                // 파일이 있으면 직접 재생
+                localVideo.src = videoUrl;
+                localVideo.loop = true;
+                localVideo.muted = true;
+                return localVideo.play().then(() => {
+                  setUseLocalVideo(true); // 재생 성공 후 상태 업데이트
+                  console.log(`%c✅ 로컬 idle 비디오 재생 시작: ${currentEmotion}`, 'color: green; font-weight: bold');
+                }).catch((err) => {
+                  console.error(`%c❌ 로컬 비디오 재생 실패:`, 'color: red; font-weight: bold', err);
+                });
+              } else {
+                // 파일이 없으면 서버 스트림 사용 (프레임 수집 시작)
+                console.log(`%c⚠️ 로컬 비디오 파일 없음: ${videoUrl}, 서버 스트림에서 캐시 생성`, 'color: orange; font-weight: bold');
+                throw new Error('Local video file not found');
+              }
+            });
+        }
+      }).catch((error) => {
+        console.warn(`%c⚠️ 비디오 로드 실패 (서버 스트림 사용): ${error.message}`, 'color: orange; font-weight: bold');
+      });
+    } else if (!shouldPlayLocal && useLocalVideo) {
+      // speaking/processing 상태이거나 WebSocket 프레임이 있을 때 일시정지
+      localVideo.pause();
+      // Blob URL 정리 (메모리 누수 방지)
+      if (localVideo.src && localVideo.src.startsWith('blob:')) {
+        URL.revokeObjectURL(localVideo.src);
+      }
+      setUseLocalVideo(false);
+      console.log('%c⏸️ 로컬 idle 비디오 일시정지 (WebSocket 스트림 활성화)', 'color: orange; font-weight: bold');
+    }
+
+    // cleanup: 컴포넌트 언마운트 시 Blob URL 정리
+    return () => {
+      if (localVideoRef.current?.src && localVideoRef.current.src.startsWith('blob:')) {
+        URL.revokeObjectURL(localVideoRef.current.src);
+      }
+    };
+  }, [pipelineState, frameData, isConnected, useLocalVideo, emotion]);
 
   // Handle frame data from WebSocket
   const handleFrameData = useCallback((data: ArrayBuffer) => {
@@ -96,51 +178,23 @@ export function AvatarView({
     }
   }, [onFrameData]);
 
-  // Canvas 초기화 및 배경 그리기 (한 번만 실행)
-  useEffect(() => {
-    if (!useCanvas || !canvasRef.current || canvasInitialized.current) return;
+  // Canvas 초기화는 frameData가 있을 때만 수행 (WebSocket 프레임용)
 
-    const ctx = canvasRef.current.getContext('2d');
-    if (!ctx) return;
-
-    // Canvas 전체를 초기 배경색으로 채우기
-    ctx.fillStyle = '#111827'; // gray-900
-    ctx.fillRect(0, 0, width, height);
-    
-    canvasInitialized.current = true;
-    console.debug('Canvas initialized with background');
-  }, [useCanvas, width, height]);
-
-  // 연결 후 프레임이 없을 때 로딩 표시
-  useEffect(() => {
-    if (!useCanvas || !canvasRef.current || !isConnected || frameData) return;
-
-    const ctx = canvasRef.current.getContext('2d');
-    if (!ctx) return;
-
-    // 로딩 배경
-    const gradient = ctx.createLinearGradient(0, 0, width, height);
-    gradient.addColorStop(0, '#1a1a2e');
-    gradient.addColorStop(1, '#16213e');
-    ctx.fillStyle = gradient;
-    ctx.fillRect(0, 0, width, height);
-
-    // 로딩 텍스트
-    ctx.fillStyle = 'rgba(255, 255, 255, 0.5)';
-    ctx.font = '18px sans-serif';
-    ctx.textAlign = 'center';
-    ctx.fillText('프레임 대기 중...', width / 2, height / 2);
-  }, [useCanvas, isConnected, frameData, width, height]);
+  // 로딩 표시는 로컬 비디오나 배경으로 대체되므로 제거 (로컬 비디오가 표시됨)
 
   // frameData prop이 변경되면 canvas에 그리기
   // 프레임 카운터 (디버깅용)
   const frameCountRef = useRef(0);
 
+
   useEffect(() => {
+    // WebSocket 프레임이 오면 로컬 비디오 일시정지
+    if (frameData && useLocalVideo && localVideoRef.current) {
+      localVideoRef.current.pause();
+      setUseLocalVideo(false);
+    }
+
     if (!frameData || !canvasRef.current || !useCanvas) {
-      if (!frameData) console.log('🖼️ No frameData');
-      if (!canvasRef.current) console.log('🖼️ No canvas ref');
-      if (!useCanvas) console.log('🖼️ useCanvas is false');
       return;
     }
 
@@ -148,6 +202,13 @@ export function AvatarView({
     if (!ctx) {
       console.error('🖼️ Failed to get 2D context');
       return;
+    }
+
+    // Canvas 배경 초기화 (처음 프레임일 때만)
+    if (!canvasInitialized.current) {
+      ctx.fillStyle = '#111827'; // gray-900
+      ctx.fillRect(0, 0, width, height);
+      canvasInitialized.current = true;
     }
 
     frameCountRef.current++;
@@ -189,31 +250,19 @@ export function AvatarView({
     img.src = url;
   }, [frameData, useCanvas, width, height]);
 
-  // Draw placeholder when not connected
+  // Draw placeholder background when not connected (텍스트는 HTML overlay에서 처리)
   useEffect(() => {
     if (!useCanvas || !canvasRef.current || isConnected) return;
 
     const ctx = canvasRef.current.getContext('2d');
     if (!ctx) return;
 
-    // Draw gradient background
+    // Draw gradient background only (텍스트는 제거하여 HTML overlay와 겹침 방지)
     const gradient = ctx.createLinearGradient(0, 0, width, height);
     gradient.addColorStop(0, '#16213e');
     gradient.addColorStop(1, '#0f3460');
     ctx.fillStyle = gradient;
     ctx.fillRect(0, 0, width, height);
-
-    // Draw placeholder icon
-    ctx.fillStyle = 'rgba(255, 255, 255, 0.1)';
-    ctx.beginPath();
-    ctx.arc(width / 2, height / 2 - 30, 80, 0, Math.PI * 2);
-    ctx.fill();
-
-    ctx.fillStyle = 'rgba(255, 255, 255, 0.2)';
-    ctx.font = '16px sans-serif';
-    ctx.textAlign = 'center';
-    ctx.fillText('아바타에 연결하려면', width / 2, height / 2 + 80);
-    ctx.fillText('"시작" 버튼을 누르세요', width / 2, height / 2 + 105);
   }, [useCanvas, isConnected, width, height]);
 
   return (
@@ -230,7 +279,7 @@ export function AvatarView({
         />
       )}
 
-      {/* Canvas element (for WebSocket frames) */}
+      {/* Canvas element - 항상 렌더링 (WebSocket 프레임 또는 배경용) */}
       {useCanvas && (
         <canvas
           ref={canvasRef}
@@ -239,11 +288,36 @@ export function AvatarView({
           className="avatar-video w-full h-full"
           style={{ 
             backgroundColor: '#111827',
-            display: 'block',
+            display: frameData ? 'block' : (useLocalVideo ? 'none' : 'block'), // 비디오가 재생 중이면 Canvas 숨김
             objectFit: 'contain',
+            position: 'absolute',
+            top: 0,
+            left: 0,
+            zIndex: frameData ? 2 : 0,
           }}
         />
       )}
+
+      {/* Local idle video (idle 상태일 때 재생) - WebSocket 프레임이 없을 때만 표시 */}
+      {useCanvas && !frameData && (
+        <video
+          ref={localVideoRef}
+          className="avatar-video w-full h-full"
+          loop
+          muted
+          playsInline
+          style={{ 
+            display: useLocalVideo ? 'block' : 'none',
+            objectFit: 'contain',
+            position: 'absolute',
+            top: 0,
+            left: 0,
+            zIndex: 1,
+            backgroundColor: '#111827',
+          }}
+        />
+      )}
+
 
       {/* Loading overlay */}
       {isLoading && (
@@ -257,12 +331,15 @@ export function AvatarView({
 
       {/* Placeholder when not connected */}
       {!isConnected && !isLoading && (
-        <div className="absolute inset-0 flex items-center justify-center">
+        <div className="absolute inset-0 flex items-center justify-center z-10">
           <div className="flex flex-col items-center gap-4 text-gray-400">
             <div className="w-32 h-32 rounded-full bg-gray-700/50 flex items-center justify-center">
               <User className="w-16 h-16" />
             </div>
-            <p className="text-sm">아바타 대기 중</p>
+            <div className="flex flex-col items-center gap-1">
+              <p className="text-sm font-medium">아바타 대기 화면</p>
+              <p className="text-xs text-gray-500">"시작" 버튼을 누르세요</p>
+            </div>
           </div>
         </div>
       )}

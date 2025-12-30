@@ -12,17 +12,22 @@ numpy==1.26.4  # mediapipe, matplotlib, mmcv requires numpy<2
 opencv-python>=4.8.0
 
 # MuseTalk Dependencies
-diffusers>=0.27.0
+diffusers>=0.27.2
 transformers>=4.36.0
+huggingface-hub>=0.34.0,<1.0  # Required for transformers and diffusers
 accelerate>=0.25.0
 einops>=0.7.0
+# protobuf 버전 제약: mediapipe는 <5.0 필요, diffusers는 4.x와도 호환
+protobuf>=4.25.3,<5.0.0  # mediapipe compatibility (mediapipe requires protobuf<5,>=4.25.3)
 
 # STT (SenseVoice)
 funasr>=1.0.0
 modelscope>=1.9.0
 
-# TTS (Zonos - Voice Cloning)
-zonos>=0.1.0
+# TTS
+gtts>=2.3.0  # Google TTS (stable, free) ⭐ 권장
+# edge-tts>=6.1.0  # Microsoft Edge TTS (안정성 문제로 비활성화)
+zonos>=0.1.0  # Zonos TTS (voice cloning, slow)
 pydub>=0.25.0  # Audio format conversion
 
 # Face Detection
@@ -49,6 +54,7 @@ pillow>=10.0.0
 scipy>=1.11.0
 librosa>=0.10.0
 soundfile>=0.12.0
+setuptools>=70.0.0  # pymilvus requires setuptools>69
 
 # Testing
 pytest>=7.0.0

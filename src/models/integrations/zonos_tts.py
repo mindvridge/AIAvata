@@ -431,8 +431,9 @@ class ZonosTTSModel:
             # 한국어: 약 4자/초 (보수적), 영어: 약 10자/초
             chars_per_second = 4 if language == "ko" else 10
             estimated_duration = len(text) / chars_per_second
-            # 최소 2초, 최대 15초 (여유분 1.2배)
-            max_duration = min(15.0, max(2.0, estimated_duration * 1.2))
+            # 🚀 속도 최적화: 최소 2초, 최대 6초로 제한 (짧은 문장 권장)
+            # 긴 문장은 문장 단위로 분리되어 처리됨
+            max_duration = min(6.0, max(2.0, estimated_duration * 1.2))
             max_new_tokens = int(86 * max_duration)
 
             logger.info(f"🎯 TTS 토큰 제한: {max_new_tokens} tokens (최대 {max_duration:.1f}초 오디오)")
@@ -441,6 +442,7 @@ class ZonosTTSModel:
             # TTS 생성 중에도 idle 루프가 계속 재생될 수 있도록 함
             def _generate_audio():
                 import time as time_module
+                import torch  # torch import 추가
 
                 # 조건부 생성 (Zonos API)
                 cond_dict = make_cond_dict(
@@ -465,12 +467,31 @@ class ZonosTTSModel:
                     decode_start = time_module.time()
                     try:
                         logger.info(f"🔊 오디오 디코딩 시작: codes shape={codes.shape}")
+                        
+                        # GPU 메모리 정리 (디코딩 전)
+                        try:
+                            import torch
+                            if torch.cuda.is_available():
+                                torch.cuda.empty_cache()
+                                logger.debug("GPU 캐시 정리 완료 (디코딩 전)")
+                        except:
+                            pass
+                        
+                        # 디코딩 실행
                         audio = self._model.autoencoder.decode(codes)
+                        
                         decode_time = time_module.time() - decode_start
                         logger.info(f"🔊 오디오 디코딩 완료: {decode_time:.2f}초 소요, audio shape={audio.shape if hasattr(audio, 'shape') else 'unknown'}")
                     except Exception as decode_error:
                         decode_time = time_module.time() - decode_start
                         logger.error(f"❌ 오디오 디코딩 실패: {decode_error} (소요 시간: {decode_time:.2f}초)", exc_info=True)
+                        # GPU 메모리 정리 (오류 후)
+                        try:
+                            import torch
+                            if torch.cuda.is_available():
+                                torch.cuda.empty_cache()
+                        except:
+                            pass
                         raise
 
                 # numpy 변환
@@ -629,24 +650,44 @@ class ZonosTTSModel:
 
         for idx, sentence in enumerate(sentences):
             start_time = asyncio.get_event_loop().time()
+            
+            try:
+                # 개별 문장 TTS 생성 (타임아웃 적용)
+                logger.info(f"🎤 문장 {idx+1}/{total} TTS 생성 시작: '{sentence[:30]}...'")
+                
+                audio = await asyncio.wait_for(
+                    self.synthesize(
+                        text=sentence,
+                        voice_id=voice_id,
+                        language=language,
+                    ),
+                    timeout=120.0  # 2분 타임아웃
+                )
 
-            # 개별 문장 TTS 생성
-            audio = await self.synthesize(
-                text=sentence,
-                voice_id=voice_id,
-                language=language,
-            )
+                elapsed = asyncio.get_event_loop().time() - start_time
+                audio_duration = len(audio) / self.sample_rate if len(audio) > 0 else 0
 
-            elapsed = asyncio.get_event_loop().time() - start_time
-            audio_duration = len(audio) / self.sample_rate if len(audio) > 0 else 0
+                logger.info(
+                    f"🎵 문장 {idx+1}/{total} TTS 완료: "
+                    f"'{sentence[:30]}...' → {audio_duration:.1f}초 오디오, "
+                    f"{elapsed:.1f}초 소요"
+                )
 
-            logger.info(
-                f"🎵 문장 {idx+1}/{total} TTS 완료: "
-                f"'{sentence[:30]}...' → {audio_duration:.1f}초 오디오, "
-                f"{elapsed:.1f}초 소요"
-            )
-
-            yield (audio, sentence, idx, total)
+                yield (audio, sentence, idx, total)
+                
+            except asyncio.TimeoutError:
+                elapsed = asyncio.get_event_loop().time() - start_time
+                logger.error(f"❌ 문장 {idx+1}/{total} TTS 타임아웃: {elapsed:.1f}초 후 중단")
+                # 빈 오디오 반환하여 다음 문장으로 진행
+                empty_audio = np.array([], dtype=np.float32)
+                yield (empty_audio, sentence, idx, total)
+                
+            except Exception as e:
+                elapsed = asyncio.get_event_loop().time() - start_time
+                logger.error(f"❌ 문장 {idx+1}/{total} TTS 오류: {e} (소요 시간: {elapsed:.1f}초)", exc_info=True)
+                # 빈 오디오 반환하여 다음 문장으로 진행
+                empty_audio = np.array([], dtype=np.float32)
+                yield (empty_audio, sentence, idx, total)
 
     def _generate_mock_audio(self, text_length: int) -> np.ndarray:
         """테스트용 mock 오디오 생성"""

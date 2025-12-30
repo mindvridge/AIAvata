@@ -104,13 +104,21 @@ class Settings(BaseSettings):
         default=10.0,
         description="Maximum video duration to cache in seconds (videos longer than this will stream from file)"
     )
+    disable_server_idle_stream: bool = Field(
+        default=True,
+        description="Disable server-side idle stream (use local video playback in frontend instead, saves bandwidth and server resources). Default: True (local video playback enabled)"
+    )
 
     # TTS Settings
-    tts_provider: Literal["zonos", "elevenlabs"] = Field(
-        default="zonos", description="TTS provider (zonos for voice cloning, elevenlabs for API)"
+    tts_provider: Literal["edge", "zonos", "elevenlabs"] = Field(
+        default="edge", description="TTS provider (edge: fast/free, zonos: voice cloning/slow, elevenlabs: API/paid)"
     )
     tts_voice: str = Field(
         default="default", description="TTS voice ID (Zonos voice profile ID or ElevenLabs voice ID)"
+    )
+    # Edge TTS Settings
+    edge_voice: str = Field(
+        default="ko-KR-SunHiNeural", description="Edge TTS voice (ko-KR-SunHiNeural, ko-KR-InJoonNeural, etc.)"
     )
     # ElevenLabs Settings
     elevenlabs_api_key: str = Field(
@@ -177,11 +185,12 @@ class Settings(BaseSettings):
     )
 
     # WebSocket Reconnection Settings
+    # TTS 처리가 오래 걸릴 수 있으므로 (50초 이상) 타임아웃을 늘림
     websocket_heartbeat_interval: int = Field(
-        default=60, description="Heartbeat ping interval in seconds"
+        default=120, description="Heartbeat ping interval in seconds"
     )
     websocket_heartbeat_timeout: int = Field(
-        default=120, description="Heartbeat response timeout in seconds"
+        default=300, description="Heartbeat response timeout in seconds (TTS 처리 시간 고려)"
     )
     websocket_reconnect_window: int = Field(
         default=120, description="Time window for session reconnection in seconds"

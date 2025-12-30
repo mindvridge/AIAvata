@@ -192,17 +192,17 @@ export function AudioWaveform({
   }, [isActive, waveformData.length, drawWaveform, width, height, backgroundColor]);
 
   return (
-    <div className="flex flex-col items-center gap-1 w-full">
+    <div className="flex flex-col items-center gap-0.5">
       <canvas
         ref={canvasRef}
         width={width}
         height={height}
         className={clsx(
-          'rounded border border-gray-700 w-full max-w-full',
-          'h-auto',
-          isActive && 'ring-1 ring-blue-500'
+          'rounded',
+          'block',
+          isActive && 'ring-1 ring-blue-500/50'
         )}
-        style={{ maxWidth: '100%', height: 'auto' }}
+        style={{ width: `${width}px`, height: `${height}px`, display: 'block' }}
       />
       {showLevel && (
         <div className="text-xs text-gray-400">

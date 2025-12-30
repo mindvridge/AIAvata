@@ -93,6 +93,8 @@ class AvatarRenderer:
         self._musetalk_model: Optional[MuseTalkModel] = None
         self._live_portrait_model: Optional[LivePortraitModel] = None
         self._face_mesh = None
+        self._face_landmarker = None  # tasks API용
+        self._use_tasks_api = False  # tasks API 사용 여부
 
         # 소스 이미지
         self._source_image: Optional[np.ndarray] = None
@@ -147,22 +149,56 @@ class AvatarRenderer:
             logger.error(f"Failed to load avatar image: {e}")
 
     async def _init_face_mesh(self) -> None:
-        """MediaPipe Face Mesh 초기화"""
+        """MediaPipe Face Mesh 초기화 (tasks API 사용)"""
         try:
             import mediapipe as mp
+            from mediapipe.tasks.python import vision
+            from mediapipe.tasks.python.core import base_options
+            from mediapipe.tasks.python.vision.core import vision_task_running_mode
 
-            self._mp_face_mesh = mp.solutions.face_mesh
-            self._face_mesh = self._mp_face_mesh.FaceMesh(
-                static_image_mode=False,
-                max_num_faces=1,
-                refine_landmarks=True,
-                min_detection_confidence=0.5,
-                min_tracking_confidence=0.5,
-            )
-            logger.info("MediaPipe Face Mesh initialized")
+            # MediaPipe 0.10.0+ tasks API 사용
+            if hasattr(mp, 'solutions'):
+                # 구버전 solutions API 사용
+                self._mp_face_mesh = mp.solutions.face_mesh
+                self._face_mesh = self._mp_face_mesh.FaceMesh(
+                    static_image_mode=False,
+                    max_num_faces=1,
+                    refine_landmarks=True,
+                    min_detection_confidence=0.5,
+                    min_tracking_confidence=0.5,
+                )
+                self._use_tasks_api = False
+                logger.info("MediaPipe Face Mesh initialized (solutions API)")
+            else:
+                # 새로운 tasks API 사용
+                try:
+                    base_opts = base_options.BaseOptions(
+                        model_asset_path=None,  # 번들된 모델 사용
+                        delegate=base_options.BaseOptions.Delegate.CPU
+                    )
+                    options = vision.FaceLandmarkerOptions(
+                        base_options=base_opts,
+                        output_face_blendshapes=False,
+                        output_facial_transformation_matrixes=False,
+                        num_faces=1,
+                        min_face_detection_confidence=0.5,
+                        min_face_presence_confidence=0.5,
+                        min_tracking_confidence=0.5,
+                        running_mode=vision_task_running_mode.VisionTaskRunningMode.VIDEO
+                    )
+                    self._face_landmarker = vision.FaceLandmarker.create_from_options(options)
+                    self._use_tasks_api = True
+                    logger.info("MediaPipe Face Landmarker initialized (tasks API)")
+                except Exception as e:
+                    logger.warning(f"Failed to initialize MediaPipe tasks API: {e}. Using fallback.")
+                    self._face_landmarker = None
+                    self._use_tasks_api = False
 
-        except ImportError:
-            logger.warning("MediaPipe not installed. Face detection will be limited.")
+        except (ImportError, AttributeError) as e:
+            logger.warning(f"MediaPipe not available: {e}. Face detection will be limited.")
+            self._face_mesh = None
+            self._face_landmarker = None
+            self._use_tasks_api = False
 
     async def _init_lipsync_model(self) -> None:
         """MuseTalk 립싱크 모델 초기화"""
@@ -1058,44 +1094,88 @@ class AvatarRenderer:
         Returns:
             (mouth_center, mouth_width, mouth_height) 또는 (None, 0, 0)
         """
-        if self._face_mesh is None:
-            return None, 0, 0
+        import mediapipe as mp
+        from mediapipe.tasks.python.vision.core import image as mp_image
 
-        try:
-            h, w = frame.shape[:2]
-            rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            results = self._face_mesh.process(rgb_frame)
+        if self._use_tasks_api and self._face_landmarker is not None:
+            # tasks API 사용
+            try:
+                h, w = frame.shape[:2]
+                rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                mp_img = mp_image.Image(image_format=mp_image.ImageFormat.SRGB, data=rgb_frame)
+                
+                import time
+                timestamp_ms = int(time.time() * 1000)
+                detection_result = self._face_landmarker.detect_for_video(mp_img, timestamp_ms)
 
-            if not results.multi_face_landmarks:
+                if not detection_result.face_landmarks:
+                    return None, 0, 0
+
+                landmarks = detection_result.face_landmarks[0]
+
+                # 입 랜드마크 인덱스 (MediaPipe Face Landmarker)
+                # 13: 윗입술 중앙, 14: 아랫입술 중앙
+                # 78: 왼쪽 입꼬리, 308: 오른쪽 입꼬리
+                if len(landmarks) > 308:
+                    upper_lip = landmarks[13]
+                    lower_lip = landmarks[14]
+                    left_corner = landmarks[78]
+                    right_corner = landmarks[308]
+
+                    # 입 중심 계산
+                    mouth_center_x = int((left_corner.x + right_corner.x) / 2 * w)
+                    mouth_center_y = int((upper_lip.y + lower_lip.y) / 2 * h)
+
+                    # 입 크기 계산
+                    mouth_width = int(abs(right_corner.x - left_corner.x) * w)
+                    mouth_height = int(abs(lower_lip.y - upper_lip.y) * h)
+
+                    return (mouth_center_x, mouth_center_y), mouth_width, max(mouth_height, 5)
+                else:
+                    return None, 0, 0
+
+            except Exception as e:
+                logger.debug(f"Mouth detection (tasks API) failed: {e}")
                 return None, 0, 0
+        elif self._face_mesh is not None:
+            # solutions API 사용
+            try:
+                h, w = frame.shape[:2]
+                rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                results = self._face_mesh.process(rgb_frame)
 
-            landmarks = results.multi_face_landmarks[0].landmark
+                if not results.multi_face_landmarks:
+                    return None, 0, 0
 
-            # 입 랜드마크 인덱스 (MediaPipe Face Mesh)
-            # 13: 윗입술 중앙, 14: 아랫입술 중앙
-            # 78: 왼쪽 입꼬리, 308: 오른쪽 입꼬리
-            upper_lip = landmarks[13]
-            lower_lip = landmarks[14]
-            left_corner = landmarks[78]
-            right_corner = landmarks[308]
+                landmarks = results.multi_face_landmarks[0].landmark
 
-            # 입 중심 계산
-            mouth_center_x = int((left_corner.x + right_corner.x) / 2 * w)
-            mouth_center_y = int((upper_lip.y + lower_lip.y) / 2 * h)
+                # 입 랜드마크 인덱스 (MediaPipe Face Mesh)
+                # 13: 윗입술 중앙, 14: 아랫입술 중앙
+                # 78: 왼쪽 입꼬리, 308: 오른쪽 입꼬리
+                upper_lip = landmarks[13]
+                lower_lip = landmarks[14]
+                left_corner = landmarks[78]
+                right_corner = landmarks[308]
 
-            # 입 크기 계산
-            mouth_width = int(abs(right_corner.x - left_corner.x) * w)
-            mouth_height = int(abs(lower_lip.y - upper_lip.y) * h)
+                # 입 중심 계산
+                mouth_center_x = int((left_corner.x + right_corner.x) / 2 * w)
+                mouth_center_y = int((upper_lip.y + lower_lip.y) / 2 * h)
 
-            return (mouth_center_x, mouth_center_y), mouth_width, max(mouth_height, 5)
+                # 입 크기 계산
+                mouth_width = int(abs(right_corner.x - left_corner.x) * w)
+                mouth_height = int(abs(lower_lip.y - upper_lip.y) * h)
 
-        except Exception as e:
-            logger.debug(f"Mouth detection failed: {e}")
+                return (mouth_center_x, mouth_center_y), mouth_width, max(mouth_height, 5)
+
+            except Exception as e:
+                logger.debug(f"Mouth detection (solutions API) failed: {e}")
+                return None, 0, 0
+        else:
             return None, 0, 0
 
     def detect_face_landmarks(self, image: np.ndarray) -> Optional[dict]:
         """
-        MediaPipe로 얼굴 랜드마크 감지
+        MediaPipe로 얼굴 랜드마크 감지 (solutions API 또는 tasks API)
 
         Args:
             image: 입력 이미지 (BGR)
@@ -1103,31 +1183,64 @@ class AvatarRenderer:
         Returns:
             랜드마크 정보 딕셔너리 또는 None
         """
-        if self._face_mesh is None:
+        import mediapipe as mp
+        from mediapipe.tasks.python.vision.core import image as mp_image
+
+        if self._use_tasks_api and self._face_landmarker is not None:
+            # tasks API 사용
+            try:
+                # BGR → RGB
+                rgb_image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+                mp_img = mp_image.Image(image_format=mp_image.ImageFormat.SRGB, data=rgb_image)
+                
+                # 비디오 모드에서는 timestamp 필요
+                import time
+                timestamp_ms = int(time.time() * 1000)
+                detection_result = self._face_landmarker.detect_for_video(mp_img, timestamp_ms)
+
+                if not detection_result.face_landmarks:
+                    return None
+
+                landmarks = detection_result.face_landmarks[0]
+                h, w = image.shape[:2]
+
+                # tasks API의 랜드마크는 NormalizedLandmark 리스트
+                return {
+                    "landmarks": [
+                        {"x": lm.x * w, "y": lm.y * h, "z": lm.z * w}  # z는 깊이 (스케일 조정)
+                        for lm in landmarks
+                    ],
+                    "mouth_landmarks": self._extract_mouth_landmarks_from_list(landmarks, w, h),
+                }
+            except Exception as e:
+                logger.debug(f"Face landmark detection (tasks API) failed: {e}")
+                return None
+        elif self._face_mesh is not None:
+            # solutions API 사용
+            # BGR → RGB
+            rgb_image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+            results = self._face_mesh.process(rgb_image)
+
+            if not results.multi_face_landmarks:
+                return None
+
+            landmarks = results.multi_face_landmarks[0]
+            h, w = image.shape[:2]
+
+            # 주요 랜드마크 추출
+            return {
+                "landmarks": [
+                    {"x": lm.x * w, "y": lm.y * h, "z": lm.z}
+                    for lm in landmarks.landmark
+                ],
+                # 입 영역 (립싱크용)
+                "mouth_landmarks": self._extract_mouth_landmarks(landmarks, w, h),
+            }
+        else:
             return None
-
-        # BGR → RGB
-        rgb_image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-        results = self._face_mesh.process(rgb_image)
-
-        if not results.multi_face_landmarks:
-            return None
-
-        landmarks = results.multi_face_landmarks[0]
-        h, w = image.shape[:2]
-
-        # 주요 랜드마크 추출
-        return {
-            "landmarks": [
-                {"x": lm.x * w, "y": lm.y * h, "z": lm.z}
-                for lm in landmarks.landmark
-            ],
-            # 입 영역 (립싱크용)
-            "mouth_landmarks": self._extract_mouth_landmarks(landmarks, w, h),
-        }
 
     def _extract_mouth_landmarks(self, landmarks, width: int, height: int) -> list:
-        """입 영역 랜드마크 추출"""
+        """입 영역 랜드마크 추출 (solutions API용)"""
         # MediaPipe Face Mesh 입 랜드마크 인덱스
         mouth_indices = [
             61, 146, 91, 181, 84, 17, 314, 405, 321, 375,
@@ -1147,11 +1260,36 @@ class AvatarRenderer:
 
         return mouth_points
 
+    def _extract_mouth_landmarks_from_list(self, landmarks_list, width: int, height: int) -> list:
+        """입 영역 랜드마크 추출 (tasks API용)"""
+        # MediaPipe Face Landmarker 입 랜드마크 인덱스 (동일)
+        mouth_indices = [
+            61, 146, 91, 181, 84, 17, 314, 405, 321, 375,
+            291, 308, 324, 318, 402, 317, 14, 87, 178, 88,
+            95, 78, 191, 80, 81, 82, 13, 312, 311, 310,
+            415, 308, 324, 318, 402, 317,
+        ]
+
+        mouth_points = []
+        for idx in mouth_indices:
+            if idx < len(landmarks_list):
+                lm = landmarks_list[idx]
+                mouth_points.append({
+                    "x": lm.x * width,
+                    "y": lm.y * height,
+                })
+
+        return mouth_points
+
     async def cleanup(self) -> None:
         """리소스 정리"""
         if self._face_mesh:
             self._face_mesh.close()
             self._face_mesh = None
+        if self._face_landmarker:
+            self._face_landmarker.close()
+            self._face_landmarker = None
+        self._use_tasks_api = False
 
         if self._musetalk_model:
             await self._musetalk_model.cleanup()

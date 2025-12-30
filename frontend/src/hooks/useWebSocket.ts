@@ -115,7 +115,13 @@ export function useWebSocket(options: UseWebSocketOptions): UseWebSocketReturn {
 
       // Handle errors
       if (message.type === 'error') {
-        console.error('WebSocket error:', (message as { error: string }).error);
+        const errorMsg = (message as { error: string }).error;
+        // heartbeat_timeout은 TTS 처리 중에 발생할 수 있으므로 경고로만 표시
+        if (errorMsg === 'heartbeat_timeout') {
+          console.warn('WebSocket heartbeat timeout (TTS 처리 중 - 무시 가능)');
+        } else {
+          console.error('WebSocket error:', errorMsg);
+        }
       }
 
       onMessageRef.current?.(message);
