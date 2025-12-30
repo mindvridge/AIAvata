@@ -266,11 +266,9 @@ class AvatarRenderer:
         self.idle_loops_dir.mkdir(parents=True, exist_ok=True)
 
         # 🎬 우선순위 1: Pre-rendered idle loop 비디오 직접 로드 (최고 품질)
-        # avata_ani.mp4 → neutral.mp4 심볼릭 링크로 사용
+        # avata_ani.mp4를 기본 루프 영상으로 사용
         prerendered_paths = [
-            self.idle_loops_dir / "neutral.mp4",
-            self.idle_loops_dir / "avata_idle.mp4",
-            Path("assets/avatars/avata_ani.mp4"),
+            Path("assets/avatars/avata_ani.mp4"),  # 기본 루프 영상
         ]
 
         for prerendered_path in prerendered_paths:
@@ -324,54 +322,9 @@ class AvatarRenderer:
                 
                 return  # Pre-rendered 영상 등록 완료
 
-        # 🎬 우선순위 2: 감정별 개별 idle loop 영상
-        for emotion in Emotion:
-            filename = EmotionMapping.get_idle_loop_filename(emotion)
-            filepath = self.idle_loops_dir / filename
-
-            # 기존 루프 파일이 있으면 캐싱 여부 결정
-            if filepath.exists():
-                # 비디오 정보 확인
-                video_info = await self._get_video_info(str(filepath))
-                total_frames = video_info.get("total_frames", 0)
-                duration = video_info.get("duration", 0.0)
-                
-                # 캐싱 여부 결정
-                should_cache = (
-                    self._cache_enabled and
-                    total_frames > 0 and
-                    total_frames <= self._cache_max_frames and
-                    duration <= self._cache_max_duration
-                )
-                
-                if should_cache:
-                    # 프레임 캐싱
-                    frames = await self._load_video_frames(str(filepath))
-                    if frames:
-                        self._idle_loops[emotion] = frames
-                        self._cached_videos[emotion] = True
-                        logger.info(f"✅ Idle loop 등록: {filename} (프레임 캐싱: {len(frames)} 프레임)")
-                else:
-                    # 파일 스트리밍
-                    self._idle_video_paths[emotion] = filepath
-                    self._cached_videos[emotion] = False
-                    logger.info(f"✅ Idle loop 등록: {filename} (파일 스트리밍: {total_frames} 프레임)")
-                continue
-
-            # LivePortrait로 idle 루프 생성 시도 (품질이 낮을 수 있음)
-            if self._live_portrait_model and self._source_image is not None:
-                frames = await self._generate_idle_loop_with_live_portrait(emotion)
-                if frames:
-                    self._idle_loops[emotion] = frames
-                    logger.info(f"Generated idle loop for {emotion.value}: {len(frames)} frames")
-                    continue
-
-            logger.debug(f"Idle loop not available for {emotion.value}")
-
-        # 루프가 하나도 없으면 기본 생성
-        if not self._idle_loops:
-            logger.warning("No idle loops available. Creating default loops.")
-            self._create_default_loops()
+        # avata_ani.mp4가 없으면 경고
+        logger.warning(f"⚠️ avata_ani.mp4를 찾을 수 없습니다: assets/avatars/avata_ani.mp4")
+        logger.warning("   idle 루프 영상이 없어 idle 상태에서 기본 이미지를 사용합니다.")
 
     async def _generate_idle_loop_with_live_portrait(
         self,

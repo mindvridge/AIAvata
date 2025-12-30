@@ -80,7 +80,7 @@ export function AvatarView({
 
     const localVideo = localVideoRef.current;
     const currentEmotion = emotion || 'neutral';
-    const videoUrl = `/idle-loops/${currentEmotion}.mp4`; // 감정에 따라 변경 가능
+    const videoUrl = `/avatars/avata_ani.mp4`; // avata_ani.mp4만 사용
     
     // WebSocket 프레임이 없을 때 로컬 비디오 재생 (idle, processing, listening 등)
     // speaking 상태일 때는 TTS 오디오와 함께 프레임이 올 수 있으므로 프레임이 없을 때만 재생

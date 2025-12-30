@@ -435,7 +435,8 @@ class LivePortraitModel:
 
         video_path = Path(video_path)
         if not video_path.exists():
-            logger.error(f"Driving video not found: {video_path}")
+            # 파일이 없어도 에러가 아닌 경고로 처리 (기본 동작에 영향을 주지 않음)
+            logger.debug(f"Driving video not found (optional): {video_path}")
             return False
 
         logger.info(f"Loading driving video: {video_path}")

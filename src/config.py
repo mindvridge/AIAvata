@@ -56,7 +56,7 @@ class Settings(BaseSettings):
         default="assets/avatars", description="Directory for avatar images"
     )
     default_avatar_image: str = Field(
-        default="assets/avatars/avata.png", description="Default avatar image path"
+        default="assets/avatars/avata_image.png", description="Default avatar image path"
     )
     driving_video_path: Optional[str] = Field(
         default=None, description="Driving video path for idle animation (LivePortrait)"
@@ -83,7 +83,7 @@ class Settings(BaseSettings):
         default=16000, description="Audio sample rate for STT"
     )
     video_width: int = Field(default=512, description="Output video width")
-    video_height: int = Field(default=512, description="Output video height")
+    video_height: int = Field(default=768, description="Output video height (matches avata_image.png aspect ratio 896x1344)")
 
     # Lip Sync Settings
     fast_lipsync: bool = Field(

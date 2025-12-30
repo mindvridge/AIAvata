@@ -411,17 +411,63 @@ class MuseTalkModel:
                     self._face_cache[cache_key] = face_bbox
                     logger.warning(f"⚠️ 얼굴 감지 실패 - 기본 위치 사용: {face_bbox}")
 
+            # 패딩 정보 저장 (블렌딩 시 사용)
+            pad_info = None  # (pad_x, pad_y, resized_w, resized_h, face_h, face_w)
+            
             if face_bbox is not None:
                 x1, y1, x2, y2 = face_bbox
                 # 얼굴 영역만 크롭
                 face_region = source_frame[y1:y2, x1:x2]
-                face_crop = cv2.resize(face_region, (256, 256))
-                logger.debug(f"Face detected: bbox=({x1}, {y1}, {x2}, {y2})")
+                face_h, face_w = face_region.shape[:2]
+                face_aspect = face_w / face_h
+                
+                # 🔑 비율 유지하면서 256x256으로 변환 (패딩 추가)
+                # 비율 유지하면서 256 크기에 맞춤
+                if face_aspect > 1.0:  # 가로가 더 긴 경우
+                    new_w = 256
+                    new_h = int(256 / face_aspect)
+                else:  # 세로가 더 긴 경우
+                    new_h = 256
+                    new_w = int(256 * face_aspect)
+                
+                # 비율 유지 리사이즈
+                face_resized = cv2.resize(face_region, (new_w, new_h), interpolation=cv2.INTER_CUBIC)
+                
+                # 256x256에 맞추기 위해 패딩 추가
+                face_crop = np.zeros((256, 256, 3), dtype=np.uint8)
+                pad_y = (256 - new_h) // 2
+                pad_x = (256 - new_w) // 2
+                face_crop[pad_y:pad_y+new_h, pad_x:pad_x+new_w] = face_resized
+                
+                # 패딩 정보 저장
+                pad_info = (pad_x, pad_y, new_w, new_h, face_h, face_w)
+                
+                logger.info(f"📐 얼굴 크롭 비율 유지: 원본={face_w}x{face_h} (비율={face_aspect:.4f}), 리사이즈={new_w}x{new_h}, 패딩=({pad_x},{pad_y})")
+                logger.debug(f"Face detected: bbox=({x1}, {y1}, {x2}, {y2}), aspect={face_aspect:.2f}, padded to 256x256 (pad={pad_x},{pad_y})")
             else:
-                # 얼굴 감지 실패 시 전체 프레임 사용
-                face_crop = cv2.resize(source_frame, (256, 256))
+                # 얼굴 감지 실패 시 전체 프레임 사용 (비율 유지)
+                h, w = source_frame.shape[:2]
+                aspect = w / h
+                
+                if aspect > 1.0:
+                    new_w = 256
+                    new_h = int(256 / aspect)
+                else:
+                    new_h = 256
+                    new_w = int(256 * aspect)
+                
+                frame_resized = cv2.resize(source_frame, (new_w, new_h), interpolation=cv2.INTER_CUBIC)
+                
+                face_crop = np.zeros((256, 256, 3), dtype=np.uint8)
+                pad_y = (256 - new_h) // 2
+                pad_x = (256 - new_w) // 2
+                face_crop[pad_y:pad_y+new_h, pad_x:pad_x+new_w] = frame_resized
+                
+                # 패딩 정보 저장 (전체 프레임용)
+                pad_info = (pad_x, pad_y, new_w, new_h, h, w)
                 face_bbox = None
-                logger.debug("Face not detected, using full frame")
+                logger.info(f"📐 전체 프레임 비율 유지: 원본={w}x{h} (비율={aspect:.4f}), 리사이즈={new_w}x{new_h}, 패딩=({pad_x},{pad_y})")
+                logger.debug(f"Face not detected, using full frame (aspect={aspect:.2f}, padded to 256x256, pad={pad_x},{pad_y})")
             
             # VAE로 얼굴 이미지를 latent로 인코딩
             # get_latents_for_unet은 이미지 경로나 numpy array를 받을 수 있음
@@ -567,9 +613,21 @@ class MuseTalkModel:
             
             # 리사이즈 시도
             try:
-                # VAE 출력을 256x256으로 리사이즈 (CUBIC - 아티팩트 최소화)
-                result_256 = cv2.resize(output_np, (256, 256), interpolation=cv2.INTER_CUBIC)
+                # VAE 출력은 이미 256x256이어야 함 (확인 후 필요시에만 리사이즈)
+                if output_np.shape[:2] != (256, 256):
+                    logger.warning(f"VAE 출력 크기가 예상과 다름: {output_np.shape[:2]}, 256x256으로 리사이즈")
+                    result_256 = cv2.resize(output_np, (256, 256), interpolation=cv2.INTER_CUBIC)
+                else:
+                    result_256 = output_np.copy()
+                
                 source_256 = face_crop.copy()
+                
+                # 패딩 정보 로깅
+                if pad_info is not None:
+                    pad_x, pad_y, resized_w, resized_h, orig_h, orig_w = pad_info
+                    logger.info(f"📐 패딩 정보: pad=({pad_x},{pad_y}), resized=({resized_w}x{resized_h}), orig=({orig_w}x{orig_h})")
+                else:
+                    logger.warning("⚠️ pad_info가 None입니다 - 비율 왜곡 가능성")
 
                 # VAE 출력과 원본의 차이 로깅
                 diff = result_256.astype(np.float32) - source_256.astype(np.float32)
@@ -787,8 +845,28 @@ class MuseTalkModel:
                     # =====================================================
                     # MuseTalk get_image_blending 방식으로 블렌딩
                     # =====================================================
-                    # VAE 출력을 원본 얼굴 크기로 리사이즈 (CUBIC - 아티팩트 최소화)
-                    result_face = cv2.resize(result_256, (x2 - x1, y2 - y1), interpolation=cv2.INTER_CUBIC)
+                    # 🔑 패딩 제거 후 원본 비율로 리사이즈 (비율 왜곡 방지)
+                    if pad_info is not None:
+                        pad_x, pad_y, resized_w, resized_h, orig_face_h, orig_face_w = pad_info
+                        logger.info(f"📐 패딩 제거: result_256 shape={result_256.shape}, pad=({pad_x},{pad_y}), extract=({resized_w}x{resized_h})")
+                        
+                        # 패딩 제거: 원본 비율로 리사이즈된 영역만 추출
+                        result_without_pad = result_256[pad_y:pad_y+resized_h, pad_x:pad_x+resized_w]
+                        
+                        # 원본 얼굴 크기로 리사이즈 (비율 유지)
+                        target_size = (orig_face_w, orig_face_h)
+                        result_face = cv2.resize(result_without_pad, target_size, interpolation=cv2.INTER_CUBIC)
+                        
+                        # 비율 검증
+                        restored_aspect = result_face.shape[1] / result_face.shape[0]
+                        expected_aspect = orig_face_w / orig_face_h
+                        aspect_diff = abs(restored_aspect - expected_aspect)
+                        
+                        logger.info(f"📐 복원 결과: {result_face.shape[1]}x{result_face.shape[0]}, 비율={restored_aspect:.4f}, 예상={expected_aspect:.4f}, 차이={aspect_diff:.4f}")
+                    else:
+                        # 패딩 정보가 없으면 기존 방식 (하지만 일반적으로는 pad_info가 있어야 함)
+                        logger.warning(f"⚠️ pad_info 없음 - 강제 리사이즈: {result_256.shape} → ({x2-x1}x{y2-y1})")
+                        result_face = cv2.resize(result_256, (x2 - x1, y2 - y1), interpolation=cv2.INTER_CUBIC)
 
                     # 🔑 Unsharp Mask 샤프닝 적용 (VAE 출력 선명화)
                     # 실시간 처리를 위해 경량 필터 사용
@@ -823,7 +901,16 @@ class MuseTalkModel:
                 # 얼굴 bbox가 없는 경우 (폴백) - 전체 프레임에 VAE 출력 적용
                 else:
                     logger.error("❌ face_bbox가 None - 얼굴 감지 실패! 전체 프레임에 VAE 적용")
-                    result_frame = cv2.resize(result_256, (w, h), interpolation=cv2.INTER_CUBIC)
+                    # 🔑 패딩 제거 후 원본 비율로 리사이즈 (비율 왜곡 방지)
+                    if pad_info is not None:
+                        pad_x, pad_y, resized_w, resized_h, orig_h, orig_w = pad_info
+                        # 패딩 제거: 원본 비율로 리사이즈된 영역만 추출
+                        result_without_pad = result_256[pad_y:pad_y+resized_h, pad_x:pad_x+resized_w]
+                        # 원본 프레임 크기로 리사이즈 (비율 유지)
+                        result_frame = cv2.resize(result_without_pad, (orig_w, orig_h), interpolation=cv2.INTER_CUBIC)
+                    else:
+                        # 패딩 정보가 없으면 기존 방식
+                        result_frame = cv2.resize(result_256, (w, h), interpolation=cv2.INTER_CUBIC)
 
                     if result_frame is not None and result_frame.shape[:2] == (h, w):
                         logger.info(f"✅ MuseTalk lip sync SUCCESS: output shape={result_frame.shape}")
