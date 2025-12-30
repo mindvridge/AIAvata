@@ -82,8 +82,8 @@ class Settings(BaseSettings):
     audio_sample_rate: int = Field(
         default=16000, description="Audio sample rate for STT"
     )
-    video_width: int = Field(default=512, description="Output video width")
-    video_height: int = Field(default=768, description="Output video height (matches avata_image.png aspect ratio 896x1344)")
+    video_width: int = Field(default=784, description="Output video width (default: avata_ani.mp4 width)")
+    video_height: int = Field(default=1176, description="Output video height (default: avata_ani.mp4 height)")
 
     # Lip Sync Settings
     fast_lipsync: bool = Field(

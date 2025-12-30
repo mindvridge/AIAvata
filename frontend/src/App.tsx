@@ -104,9 +104,9 @@ function App() {
         isCollectingRef.current = false;
         collectedFramesRef.current = [];
         
-        // 프레임들을 비디오로 변환하고 캐시에 저장
+        // 프레임들을 비디오로 변환하고 캐시에 저장 (원본 비디오 크기: 784x1176)
         import('./utils/idleVideoCache').then(({ cacheIdleVideoFrames }) => {
-          cacheIdleVideoFrames(frames, currentEmotion, 512, 512, 30).then(() => {
+          cacheIdleVideoFrames(frames, currentEmotion, 784, 1176, 30).then(() => {
             console.log(`%c✅ Idle 비디오 캐시 저장 완료: ${currentEmotion} (${frames.length} frames)`, 'color: green; font-weight: bold');
           }).catch(console.error);
         });
@@ -468,17 +468,17 @@ function App() {
               />
             </div>
 
-            {/* Avatar view - 고정 크기, 항상 동일한 공간 차지 */}
-            <div className="relative w-full max-w-full sm:max-w-md lg:max-w-lg flex-shrink-0 flex items-center justify-center" style={{ height: '512px', minHeight: '512px' }}>
-              <div className="w-full h-full aspect-square max-w-full">
+            {/* Avatar view - 원본 비디오 비율 유지 (784x1176, 세로 비디오) */}
+            <div className="relative w-full max-w-full sm:max-w-md lg:max-w-lg flex-shrink-0 flex items-center justify-center" style={{ maxHeight: '70vh' }}>
+              <div className="w-full h-full flex items-center justify-center" style={{ aspectRatio: '784/1176' }}>
                 <AvatarView
                   emotion={emotion}
                   pipelineState={pipelineState}
                   isConnected={isConnected}
                   isLoading={connectionState === 'connecting' || isConnecting}
                   frameData={frameData}
-                  width={512}
-                  height={512}
+                  width={784}
+                  height={1176}
                 />
               </div>
 

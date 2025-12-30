@@ -28,7 +28,7 @@ class VideoProcessor:
 
     def __init__(
         self,
-        target_size: Tuple[int, int] = (512, 512),
+        target_size: Tuple[int, int] = (784, 1176),  # 원본 비디오 크기 (avata_ani.mp4)
         target_fps: int = 30,
         jpeg_quality: int = 85,
     ):

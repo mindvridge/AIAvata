@@ -35,7 +35,7 @@ class IdleLoopManager:
     def __init__(
         self,
         idle_loops_dir: str = "assets/idle_loops",
-        target_size: Tuple[int, int] = (512, 512),
+        target_size: Tuple[int, int] = (784, 1176),  # 원본 비디오 크기 (avata_ani.mp4)
         target_fps: int = 30,
     ):
         """

@@ -141,8 +141,8 @@ class VideoFrame(BaseModel):
     """비디오 프레임"""
 
     data: bytes = Field(..., description="Encoded frame data (JPEG/H.264)")
-    width: int = Field(default=512, description="Frame width")
-    height: int = Field(default=512, description="Frame height")
+    width: int = Field(default=784, description="Frame width (default: avata_ani.mp4 width)")
+    height: int = Field(default=1176, description="Frame height (default: avata_ani.mp4 height)")
     timestamp: float = Field(..., description="Frame timestamp")
     frame_index: int = Field(default=0, description="Frame index in sequence")
     encoding: str = Field(default="jpeg", description="Encoding format")
