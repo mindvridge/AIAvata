@@ -33,6 +33,11 @@ pydub>=0.25.0  # Audio format conversion
 # Face Detection
 mediapipe>=0.10.0
 
+# Face Restoration (GFPGAN)
+gfpgan>=1.3.8
+basicsr>=1.4.2
+facexlib>=0.3.0
+
 # WebRTC
 livekit>=0.10.0
 livekit-api>=0.5.0
