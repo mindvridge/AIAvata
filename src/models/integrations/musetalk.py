@@ -666,27 +666,33 @@ class MuseTalkModel:
                                 mask_image = Image.new('L', ori_shape, 0)
                                 mask_image.paste(mask_small, (x1 - crop_x1, y1 - crop_y1))
                                 
-                                # 상단 50% 제거 (입만 남김) - MuseTalk upper_boundary_ratio=0.5
+                                # 🔑 상단 60% 제거 (입만 정확하게 마스킹)
+                                # 0.5 → 0.6으로 변경하여 입 영역만 더 정확하게
                                 width, height = mask_image.size
-                                top_boundary = int(height * 0.5)
+                                top_boundary = int(height * 0.6)
                                 modified_mask = Image.new('L', ori_shape, 0)
                                 modified_mask.paste(
                                     mask_image.crop((0, top_boundary, width, height)),
                                     (0, top_boundary)
                                 )
                                 
-                                # 🔑 가우시안 블러 감소 (입 선명도 향상)
-                                # 이전: 0.1 * size (너무 큼) → 이후: 0.03 * size (더 선명)
-                                blur_size = max(3, int(0.03 * ori_shape[0] // 2 * 2) + 1)
+                                # 🔑 최소 블러만 적용 (입 선명도 최대화)
+                                # 블러를 최소화하여 입 주변 선명도 향상
+                                blur_size = max(3, int(0.01 * ori_shape[0] // 2 * 2) + 1)
                                 if blur_size % 2 == 0:
                                     blur_size += 1  # 홀수로 만들기
-                                mask_array = cv2.GaussianBlur(
-                                    np.array(modified_mask),
-                                    (blur_size, blur_size), 0
-                                )
+                                # 매우 작은 블러만 적용
+                                if blur_size > 3:
+                                    mask_array = cv2.GaussianBlur(
+                                        np.array(modified_mask),
+                                        (blur_size, blur_size), 0
+                                    )
+                                else:
+                                    mask_array = np.array(modified_mask)
                                 
-                                # 🔑 마스크 최대값 제한 (자연스러운 블렌딩)
-                                mask_array = np.clip(mask_array, 0, 180)
+                                # 🔑 마스크 최대값 제한 (더 선명한 블렌딩)
+                                # 180 → 200으로 증가하여 더 확실한 블렌딩
+                                mask_array = np.clip(mask_array, 0, 200)
                                 
                                 # 마스크 유효 픽셀 수 확인
                                 valid_pixels = np.sum(mask_array > 0)
@@ -743,17 +749,17 @@ class MuseTalkModel:
                         rel_x2 = x2 - crop_x1
                         rel_y2 = y2 - crop_y1
                         
-                        # 🔑 입 영역만 마스크 (얼굴 하단 25%만, 폭 40%)
+                        # 🔑 입 영역만 정확하게 마스크 (더 좁은 범위)
                         face_height = rel_y2 - rel_y1
                         face_width = rel_x2 - rel_x1
                         
-                        # 입 위치: 얼굴 하단 60-85% 영역 (더 정확한 입 위치)
-                        mouth_y_start = rel_y1 + int(face_height * 0.60)
-                        mouth_y_end = rel_y1 + int(face_height * 0.85)
+                        # 입 위치: 얼굴 하단 65-80% 영역 (입술만 정확하게)
+                        mouth_y_start = rel_y1 + int(face_height * 0.65)
+                        mouth_y_end = rel_y1 + int(face_height * 0.80)
                         
-                        # 입 폭: 얼굴 폭의 40%
+                        # 입 폭: 얼굴 폭의 30% (더 좁게)
                         mouth_x_center = (rel_x1 + rel_x2) // 2
-                        mouth_half_width = int(face_width * 0.20)
+                        mouth_half_width = int(face_width * 0.15)
                         mouth_x_start = max(0, mouth_x_center - mouth_half_width)
                         mouth_x_end = min(mask_w, mouth_x_center + mouth_half_width)
                         
@@ -774,14 +780,16 @@ class MuseTalkModel:
                                     intensity = int(200 * (1.0 - dist * 0.5))  # 최대 200
                                     mask_array[y, x] = max(mask_array[y, x], intensity)
                         
-                        # 🔑 블러 감소 (입 선명도 향상)
-                        blur_size = max(3, int(0.03 * ori_shape[0] // 2 * 2) + 1)
+                        # 🔑 최소 블러만 적용 (입 선명도 최대화)
+                        blur_size = max(3, int(0.01 * ori_shape[0] // 2 * 2) + 1)
                         if blur_size % 2 == 0:
                             blur_size += 1  # 홀수로 만들기
-                        mask_array = cv2.GaussianBlur(mask_array, (blur_size, blur_size), 0)
+                        # 매우 작은 블러만 적용
+                        if blur_size > 3:
+                            mask_array = cv2.GaussianBlur(mask_array, (blur_size, blur_size), 0)
                         
-                        # 🔑 마스크 최대값 제한 (더 보수적으로 - 150)
-                        mask_array = np.clip(mask_array, 0, 150)
+                        # 🔑 마스크 최대값 증가 (더 선명한 블렌딩)
+                        mask_array = np.clip(mask_array, 0, 200)
                     
                     # =====================================================
                     # MuseTalk get_image_blending 방식으로 블렌딩
@@ -793,14 +801,20 @@ class MuseTalkModel:
                     # face_large에 result_face 붙이기
                     face_large.paste(result_face_pil, (x1 - crop_x1, y1 - crop_y1))
                     
-                    # 마스크를 이용해 body에 블렌딩
-                    mask_pil = Image.fromarray(mask_array).convert("L")
+                    # 🔑 마스크를 더 날카롭게 (입 선명도 향상)
+                    # 중간 값들을 줄여서 더 선명한 블렌딩
+                    mask_sharp = mask_array.copy().astype(np.float32)
+                    # 낮은 값(0~100)은 더 낮추고, 높은 값(100~200)은 더 높임
+                    mask_sharp = np.where(mask_sharp < 100, mask_sharp * 0.5, mask_sharp * 1.2)
+                    mask_sharp = np.clip(mask_sharp, 0, 255).astype(np.uint8)
+                    
+                    mask_pil = Image.fromarray(mask_sharp).convert("L")
                     
                     # 마스크 통계 로깅
-                    mask_min = np.min(mask_array)
-                    mask_max = np.max(mask_array)
-                    mask_mean = np.mean(mask_array)
-                    mask_nonzero = np.count_nonzero(mask_array)
+                    mask_min = np.min(mask_sharp)
+                    mask_max = np.max(mask_sharp)
+                    mask_mean = np.mean(mask_sharp)
+                    mask_nonzero = np.count_nonzero(mask_sharp)
                     logger.info(f"🎭 블렌딩 마스크: min={mask_min}, max={mask_max}, mean={mask_mean:.1f}, nonzero={mask_nonzero}")
                     
                     body_pil.paste(face_large, (crop_x1, crop_y1), mask_pil)
