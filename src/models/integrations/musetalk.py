@@ -690,7 +690,7 @@ class MuseTalkModel:
                                     face_parser_error_reason = f"마스크 픽셀 부족 ({valid_pixels}개)"
                                     mask_array = None
                                 else:
-                                    logger.info(f"✅ Face Parser 성공: blur={blur_size}, pixels={valid_pixels}, max={np.max(mask_array):.0f}")
+                                    logger.info(f"✅ Face Parser 성공: pixels={valid_pixels}, max={np.max(mask_array):.0f}")
                             else:
                                 face_parser_error_reason = "Face Parser가 None 반환"
                                 logger.error("❌ Face Parser가 None 반환!")
