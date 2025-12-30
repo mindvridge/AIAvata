@@ -140,11 +140,16 @@ class AvatarRenderer:
         try:
             self._source_image = cv2.imread(str(path))
             if self._source_image is not None:
-                self._source_image = cv2.resize(
-                    self._source_image,
-                    (self.output_width, self.output_height),
-                )
-                logger.info(f"Loaded avatar source image: {path}")
+                # 🔑 출력 크기가 원본과 다를 경우에만 리사이즈
+                img_h, img_w = self._source_image.shape[:2]
+                if img_w != self.output_width or img_h != self.output_height:
+                    self._source_image = cv2.resize(
+                        self._source_image,
+                        (self.output_width, self.output_height),
+                    )
+                    logger.info(f"Loaded and resized avatar source image: {path} ({img_w}x{img_h} → {self.output_width}x{self.output_height})")
+                else:
+                    logger.info(f"Loaded avatar source image: {path} ({img_w}x{img_h})")
         except Exception as e:
             logger.error(f"Failed to load avatar image: {e}")
 
@@ -274,12 +279,20 @@ class AvatarRenderer:
         for prerendered_path in prerendered_paths:
             if prerendered_path.exists():
                 video_path = Path(prerendered_path)
-                
-                # 비디오 정보 확인 (프레임 수, 길이)
+
+                # 비디오 정보 확인 (프레임 수, 길이, 크기)
                 video_info = await self._get_video_info(str(video_path))
                 total_frames = video_info.get("total_frames", 0)
                 duration = video_info.get("duration", 0.0)
                 fps = video_info.get("fps", self.target_fps)
+                video_width = video_info.get("width", 0)
+                video_height = video_info.get("height", 0)
+
+                # 🔑 원본 비디오 크기로 출력 크기 자동 설정 (찌그러짐 방지)
+                if video_width > 0 and video_height > 0:
+                    self.output_width = video_width
+                    self.output_height = video_height
+                    logger.info(f"🎬 출력 크기 자동 설정: {video_width}x{video_height} (원본 비디오 크기)")
                 
                 # 캐싱 여부 결정
                 should_cache = (
@@ -358,19 +371,23 @@ class AvatarRenderer:
         def get_info():
             cap = cv2.VideoCapture(video_path)
             if not cap.isOpened():
-                return {"total_frames": 0, "fps": 0, "duration": 0.0}
-            
+                return {"total_frames": 0, "fps": 0, "duration": 0.0, "width": 0, "height": 0}
+
             total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
             fps = cap.get(cv2.CAP_PROP_FPS) or self.target_fps
             duration = total_frames / fps if fps > 0 else 0.0
-            
+            width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+            height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+
             cap.release()
             return {
                 "total_frames": total_frames,
                 "fps": fps,
                 "duration": duration,
+                "width": width,
+                "height": height,
             }
-        
+
         return await asyncio.get_event_loop().run_in_executor(None, get_info)
 
     async def _load_video_frames(self, video_path: str) -> List[np.ndarray]:
@@ -381,13 +398,13 @@ class AvatarRenderer:
             cap = cv2.VideoCapture(video_path)
             if not cap.isOpened():
                 return []
-            
+
             while True:
                 ret, frame = cap.read()
                 if not ret:
                     break
-                # 크기 조정
-                frame = cv2.resize(frame, (self.output_width, self.output_height))
+                # 🔑 원본 크기 유지 (리사이즈 제거 - 찌그러짐 방지)
+                # output_width, output_height가 원본과 동일하게 설정되므로 리사이즈 불필요
                 frames.append(frame)
             cap.release()
             return frames
@@ -703,8 +720,10 @@ class AvatarRenderer:
                     logger.warning("비디오 프레임을 읽을 수 없습니다")
                     break
 
-                # 크기 조정
+                # 🔑 원본 크기 유지 (리사이즈는 출력 크기와 다를 때만)
+                # output_width, output_height가 원본과 동일하게 설정되므로 보통 리사이즈 불필요
                 if frame.shape[1] != self.output_width or frame.shape[0] != self.output_height:
+                    logger.debug(f"프레임 크기 조정: {frame.shape[1]}x{frame.shape[0]} → {self.output_width}x{self.output_height}")
                     frame = cv2.resize(frame, (self.output_width, self.output_height))
 
                 # JPEG 인코딩

@@ -51,8 +51,8 @@ export function AvatarView({
   frameData = null,
   onFrameData,
   onRecordingStateChange,
-  width = 512,
-  height = 512,
+  width: initialWidth = 512,
+  height: initialHeight = 512,
 }: AvatarViewProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const localVideoRef = useRef<HTMLVideoElement>(null); // 로컬 idle 루프 비디오
@@ -60,6 +60,9 @@ export function AvatarView({
   const [useCanvas, setUseCanvas] = useState(!videoTrack);
   const canvasInitialized = useRef(false);
   const [useLocalVideo, setUseLocalVideo] = useState(false); // 로컬 비디오 사용 여부
+  // 🔑 동적 Canvas 크기 (첫 프레임에서 자동 감지)
+  const [canvasSize, setCanvasSize] = useState({ width: initialWidth, height: initialHeight });
+  const { width, height } = canvasSize;
 
   // Attach video track to video element
   useEffect(() => {
@@ -155,7 +158,8 @@ export function AvatarView({
   const handleFrameData = useCallback((data: ArrayBuffer) => {
     if (!canvasRef.current || !useCanvas) return;
 
-    const ctx = canvasRef.current.getContext('2d');
+    const canvas = canvasRef.current;
+    const ctx = canvas.getContext('2d');
     if (!ctx) return;
 
     // Create blob and image from frame data
@@ -164,12 +168,20 @@ export function AvatarView({
     const img = new Image();
 
     img.onload = () => {
-      ctx.drawImage(img, 0, 0, width, height);
+      // 🔑 원본 이미지 크기로 그리기 (찌그러짐 방지)
+      const imgWidth = img.naturalWidth;
+      const imgHeight = img.naturalHeight;
+      if (imgWidth > 0 && imgHeight > 0 && (canvas.width !== imgWidth || canvas.height !== imgHeight)) {
+        setCanvasSize({ width: imgWidth, height: imgHeight });
+        canvas.width = imgWidth;
+        canvas.height = imgHeight;
+      }
+      ctx.drawImage(img, 0, 0, imgWidth, imgHeight);
       URL.revokeObjectURL(url);
     };
 
     img.src = url;
-  }, [useCanvas, width, height]);
+  }, [useCanvas]);
 
   // Expose frame handler
   useEffect(() => {
@@ -229,15 +241,27 @@ export function AvatarView({
         URL.revokeObjectURL(url);
         return;
       }
+
+      // 🔑 첫 프레임에서 Canvas 크기를 이미지 크기에 맞게 자동 조정 (찌그러짐 방지)
+      const imgWidth = img.naturalWidth;
+      const imgHeight = img.naturalHeight;
+      if (imgWidth > 0 && imgHeight > 0 && (canvas.width !== imgWidth || canvas.height !== imgHeight)) {
+        console.log(`🖼️ Canvas 크기 자동 조정: ${canvas.width}x${canvas.height} → ${imgWidth}x${imgHeight}`);
+        setCanvasSize({ width: imgWidth, height: imgHeight });
+        canvas.width = imgWidth;
+        canvas.height = imgHeight;
+      }
+
       const freshCtx = canvas.getContext('2d');
       if (!freshCtx) {
         console.warn('🖼️ Could not get canvas context in onload');
         URL.revokeObjectURL(url);
         return;
       }
-      freshCtx.drawImage(img, 0, 0, width, height);
+      // 🔑 원본 이미지 크기로 그리기 (찌그러짐 방지)
+      freshCtx.drawImage(img, 0, 0, imgWidth, imgHeight);
       if (frameCountRef.current <= 3) {
-        console.log(`🖼️ Frame #${frameCountRef.current} drawn successfully (${img.naturalWidth}x${img.naturalHeight})`);
+        console.log(`🖼️ Frame #${frameCountRef.current} drawn successfully (${imgWidth}x${imgHeight})`);
       }
       URL.revokeObjectURL(url);
     };
