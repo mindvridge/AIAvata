@@ -75,12 +75,13 @@ body {
   height: 100%;
   min-width: 0;
   min-height: 0;
+  aspect-ratio: 784 / 1176;  /* 원본 비디오 비율 유지 */
 }
 
 .avatar-video {
   width: 100%;
   height: 100%;
-  object-fit: contain;
+  object-fit: cover;  /* contain → cover로 변경하여 컨테이너를 꽉 채움 */
   display: block;
 }
 

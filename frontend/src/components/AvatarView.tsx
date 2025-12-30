@@ -290,7 +290,7 @@ export function AvatarView({
   }, [useCanvas, isConnected, width, height]);
 
   return (
-    <div className="avatar-container relative w-full h-full">
+    <div className="avatar-container relative" style={{ width: '100%', height: '100%' }}>
       {/* Video element (for LiveKit) */}
       {!useCanvas && (
         <video

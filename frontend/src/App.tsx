@@ -469,8 +469,8 @@ function App() {
             </div>
 
             {/* Avatar view - 원본 비디오 비율 유지 (784x1176, 세로 비디오) */}
-            <div className="relative w-full max-w-full sm:max-w-md lg:max-w-lg flex-shrink-0 flex items-center justify-center" style={{ maxHeight: '70vh' }}>
-              <div className="w-full h-full flex items-center justify-center" style={{ aspectRatio: '784/1176' }}>
+            <div className="relative flex-shrink-0 flex items-center justify-center" style={{ maxHeight: '70vh', width: 'auto' }}>
+              <div style={{ aspectRatio: '784/1176', height: '70vh', maxHeight: '70vh' }}>
                 <AvatarView
                   emotion={emotion}
                   pipelineState={pipelineState}
