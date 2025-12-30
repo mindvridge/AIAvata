@@ -41,8 +41,8 @@ class AvatarRenderer:
         idle_loops_dir: str = "assets/idle_loops",
         avatar_image_path: Optional[str] = None,
         driving_video_path: Optional[str] = None,
-        output_width: int = 512,
-        output_height: int = 512,
+        output_width: int = 784,  # 원본 비디오 크기 (avata_ani.mp4)
+        output_height: int = 1176,  # 원본 비디오 크기 (avata_ani.mp4)
         target_fps: int = 30,
         device: str = "cuda",
         use_fp16: bool = True,
