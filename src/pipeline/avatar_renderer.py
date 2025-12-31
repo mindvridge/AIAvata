@@ -1001,7 +1001,9 @@ class AvatarRenderer:
                     audio_array, audio_sample_rate, target_sample_rate
                 )
 
-            logger.debug(f"Applying MuseTalk lip sync: frame shape={frame.shape}, audio samples={len(audio_array)}")
+            # 🔑 입력 프레임 크기 명확히 로깅
+            input_h, input_w = frame.shape[:2]
+            logger.info(f"🎤 [LipSync 입력] 프레임 크기: {input_w}x{input_h}, 오디오 샘플: {len(audio_array)}")
 
             # MuseTalk 추론 (16kHz로 통일)
             lipsync_frame = await self._musetalk_model.process_frame(
@@ -1013,7 +1015,11 @@ class AvatarRenderer:
             if lipsync_frame is None:
                 logger.error("❌ MuseTalk이 None을 반환했습니다. 내부 처리 오류입니다.")
                 return frame
-            
+
+            # 🔑 출력 프레임 크기 명확히 로깅
+            output_h, output_w = lipsync_frame.shape[:2]
+            logger.info(f"🎤 [LipSync 출력] 프레임 크기: {output_w}x{output_h} (입력: {input_w}x{input_h})")
+
             # MuseTalk 출력 크기 검증 및 리사이즈
             if lipsync_frame.shape == frame.shape:
                 logger.debug(f"MuseTalk lip sync successful: output shape={lipsync_frame.shape}")
