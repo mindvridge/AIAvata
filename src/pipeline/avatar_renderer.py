@@ -878,9 +878,9 @@ class AvatarRenderer:
                 # Settings 환경변수가 잘못 설정되어도 원본 비디오 크기 유지
                 target_h, target_w = base_frame.shape[:2]
 
-                # 🔑 프레임 크기 로깅 (디버그)
-                if frame_index == 0:
-                    logger.info(f"📐 render_with_audio: base_frame={target_w}x{target_h}, Settings output_size={self.output_width}x{self.output_height}")
+                # 🔑 프레임 크기 로깅 (모든 프레임)
+                if frame_index == 0 or frame_index % 30 == 0:
+                    logger.info(f"📐 [Frame {frame_index}] base_frame={target_w}x{target_h}, output_size={self.output_width}x{self.output_height}")
                     # Settings 값과 실제 프레임 크기가 다르면 경고
                     if target_w != self.output_width or target_h != self.output_height:
                         logger.warning(f"⚠️ Settings output_size({self.output_width}x{self.output_height})가 비디오 크기({target_w}x{target_h})와 다름! 비디오 크기 사용")
@@ -890,10 +890,10 @@ class AvatarRenderer:
                     base_frame, frame_audio, audio_sample_rate
                 )
 
-                # 🔑 립싱크 결과 크기 로깅 (디버그)
-                if frame_index == 0:
-                    lh, lw = lipsync_frame.shape[:2]
-                    logger.info(f"📐 render_with_audio: lipsync_frame={lw}x{lh}, target={target_w}x{target_h}")
+                # 🔑 립싱크 결과 크기 로깅 (모든 프레임)
+                lh, lw = lipsync_frame.shape[:2]
+                if frame_index == 0 or frame_index % 30 == 0:
+                    logger.info(f"📐 [Frame {frame_index}] lipsync 결과={lw}x{lh}, target={target_w}x{target_h}")
 
                 # 🔑 프레임 크기가 base_frame 크기와 다르면 리사이즈 (Settings 무시, 원본 비디오 크기 사용)
                 if lipsync_frame.shape[1] != target_w or lipsync_frame.shape[0] != target_h:
@@ -906,13 +906,16 @@ class AvatarRenderer:
 
                 # 🔑 최종 크기 검증
                 final_h, final_w = lipsync_frame.shape[:2]
-                if frame_index == 0:
-                    logger.info(f"📐 JPEG 인코딩 전 최종 프레임 크기: {final_w}x{final_h}")
+                if frame_index == 0 or frame_index % 30 == 0:
+                    logger.info(f"📐 [Frame {frame_index}] JPEG 인코딩 전: {final_w}x{final_h}, JPEG bytes: 예정")
 
                 # JPEG 인코딩
                 _, encoded = cv2.imencode(
                     ".jpg", lipsync_frame, [cv2.IMWRITE_JPEG_QUALITY, 85]
                 )
+
+                if frame_index == 0 or frame_index % 30 == 0:
+                    logger.info(f"📐 [Frame {frame_index}] JPEG 인코딩 완료: {len(encoded)} bytes, 전송 크기={final_w}x{final_h}")
 
                 yield VideoFrame(
                     data=encoded.tobytes(),
