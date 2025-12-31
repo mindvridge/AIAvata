@@ -62,6 +62,9 @@ class AvatarRenderer:
             use_fp16: FP16 추론 사용 여부
             settings: Application settings
         """
+        # 🔑 생성자 인자 로깅 (디버그)
+        logger.info(f"📐 AvatarRenderer.__init__: output_width={output_width}, output_height={output_height}")
+
         self.idle_loops_dir = Path(idle_loops_dir)
         self.avatar_image_path = avatar_image_path
         self.driving_video_path = driving_video_path
@@ -586,7 +589,7 @@ class AvatarRenderer:
             if self._source_image is not None:
                 # 소스 이미지가 있으면 그대로 반환
                 h, w = self._source_image.shape[:2]
-                logger.debug(f"📐 get_idle_frame: source_image 사용 ({w}x{h})")
+                logger.info(f"⚠️ get_idle_frame: idle_loops 없음! source_image 사용 ({w}x{h})")
                 return self._source_image.copy()
             else:
                 # 소스 이미지도 없으면 회색 배경
@@ -625,10 +628,10 @@ class AvatarRenderer:
         frame = frames[frame_idx_in_loop]
         self._current_frame_idx += 1
 
-        # 첫 프레임만 크기 로깅
+        # 첫 프레임만 크기 로깅 (루프 시작)
         if frame_idx_in_loop == 0:
             h, w = frame.shape[:2]
-            logger.debug(f"📐 get_idle_frame: idle_loop 프레임 ({w}x{h})")
+            logger.info(f"📐 get_idle_frame: idle_loop 프레임 ({w}x{h}) - 루프 시작")
 
         # 루프 끝에 도달했고, 대기 중이면 이벤트 발생
         if self._waiting_for_loop_end and self._loop_end_event:
