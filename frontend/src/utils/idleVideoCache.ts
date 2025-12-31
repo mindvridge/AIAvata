@@ -64,12 +64,13 @@ export async function getCachedIdleVideo(emotion: string = 'neutral'): Promise<B
 
 /**
  * 프레임들로부터 idle 비디오 생성 및 캐시 저장
+ * width/height가 제공되지 않으면 첫 번째 프레임에서 자동 감지
  */
 export async function cacheIdleVideoFrames(
   frames: ArrayBuffer[],
   emotion: string = 'neutral',
-  width: number = 784,  // 원본 비디오 크기 (avata_ani.mp4)
-  height: number = 1176,  // 원본 비디오 크기 (avata_ani.mp4)
+  width?: number,  // 제공되지 않으면 첫 번째 프레임에서 자동 감지
+  height?: number,  // 제공되지 않으면 첫 번째 프레임에서 자동 감지
   fps: number = 30
 ): Promise<void> {
   try {
@@ -78,9 +79,9 @@ export async function cacheIdleVideoFrames(
       return;
     }
 
-    console.log(`%c⬇️ Idle 비디오 생성 중: ${emotion} (${frames.length} frames)`, 'color: orange; font-weight: bold');
+    console.log(`%c⬇️ Idle 비디오 생성 중: ${emotion} (${frames.length} frames, 크기: ${width || 'auto'}x${height || 'auto'})`, 'color: orange; font-weight: bold');
 
-    // 프레임들을 비디오 Blob으로 변환
+    // 프레임들을 비디오 Blob으로 변환 (크기 자동 감지 지원)
     const { createVideoFromFrames } = await import('./idleVideoRecorder');
     const videoBlob = await createVideoFromFrames(frames, width, height, fps);
 

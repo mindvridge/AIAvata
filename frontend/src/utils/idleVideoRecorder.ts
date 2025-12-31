@@ -4,33 +4,78 @@
  */
 
 /**
+ * JPEG 프레임에서 이미지 크기 자동 감지
+ */
+async function getImageDimensions(frameData: ArrayBuffer): Promise<{ width: number; height: number }> {
+  return new Promise((resolve, reject) => {
+    const blob = new Blob([frameData], { type: 'image/jpeg' });
+    const url = URL.createObjectURL(blob);
+    const img = new Image();
+
+    img.onload = () => {
+      URL.revokeObjectURL(url);
+      console.log(`%c📐 이미지 크기 자동 감지: ${img.naturalWidth}x${img.naturalHeight}`, 'color: blue; font-weight: bold');
+      resolve({ width: img.naturalWidth, height: img.naturalHeight });
+    };
+
+    img.onerror = () => {
+      URL.revokeObjectURL(url);
+      reject(new Error('Failed to load image for dimension detection'));
+    };
+
+    img.src = url;
+  });
+}
+
+/**
  * 프레임들을 비디오 Blob으로 변환
+ * width/height가 제공되지 않으면 첫 번째 프레임에서 자동 감지
  */
 export async function createVideoFromFrames(
   frames: ArrayBuffer[],
-  width: number = 784,  // 원본 비디오 크기 (avata_ani.mp4)
-  height: number = 1176,  // 원본 비디오 크기 (avata_ani.mp4)
+  width?: number,
+  height?: number,
   fps: number = 30
 ): Promise<Blob> {
-  return new Promise((resolve, reject) => {
-    if (frames.length === 0) {
-      reject(new Error('No frames to convert'));
-      return;
-    }
+  if (frames.length === 0) {
+    throw new Error('No frames to convert');
+  }
 
+  // 크기가 제공되지 않으면 첫 번째 프레임에서 자동 감지
+  let actualWidth = width;
+  let actualHeight = height;
+
+  if (!actualWidth || !actualHeight) {
+    try {
+      const dimensions = await getImageDimensions(frames[0]);
+      actualWidth = dimensions.width;
+      actualHeight = dimensions.height;
+    } catch (error) {
+      console.error('Failed to detect image dimensions, using fallback 784x1176:', error);
+      actualWidth = 784;
+      actualHeight = 1176;
+    }
+  }
+
+  const finalWidth = actualWidth;
+  const finalHeight = actualHeight;
+
+  return new Promise((resolve, reject) => {
     // Canvas 생성
     const canvas = document.createElement('canvas');
-    canvas.width = width;
-    canvas.height = height;
+    canvas.width = finalWidth;
+    canvas.height = finalHeight;
     const ctx = canvas.getContext('2d');
     if (!ctx) {
       reject(new Error('Failed to get canvas context'));
       return;
     }
 
+    console.log(`%c🎬 비디오 생성 시작: ${finalWidth}x${finalHeight}, ${frames.length} frames, ${fps}fps`, 'color: orange; font-weight: bold');
+
     // Canvas에서 스트림 캡처
     const stream = canvas.captureStream(fps);
-    
+
     // MediaRecorder 생성
     const mimeTypes = [
       'video/webm;codecs=vp9',
@@ -67,14 +112,14 @@ export async function createVideoFromFrames(
     mediaRecorder.onstop = () => {
       if (chunks.length > 0) {
         const blob = new Blob(chunks, { type: selectedMimeType });
-        console.log(`%c✅ 비디오 생성 완료: ${(blob.size / 1024).toFixed(2)}KB`, 'color: green; font-weight: bold');
+        console.log(`%c✅ 비디오 생성 완료: ${finalWidth}x${finalHeight}, ${(blob.size / 1024).toFixed(2)}KB`, 'color: green; font-weight: bold');
         resolve(blob);
       } else {
         reject(new Error('No video data recorded'));
       }
     };
 
-    mediaRecorder.onerror = (event) => {
+    mediaRecorder.onerror = () => {
       reject(new Error('MediaRecorder error'));
     };
 
@@ -103,8 +148,8 @@ export async function createVideoFromFrames(
 
       img.onload = () => {
         // Canvas에 프레임 그리기
-        ctx.clearRect(0, 0, width, height);
-        ctx.drawImage(img, 0, 0, width, height);
+        ctx.clearRect(0, 0, finalWidth, finalHeight);
+        ctx.drawImage(img, 0, 0, finalWidth, finalHeight);
         URL.revokeObjectURL(url);
 
         frameIndex++;
@@ -125,9 +170,9 @@ export async function createVideoFromFrames(
     const firstFrameBlob = new Blob([frames[0]], { type: 'image/jpeg' });
     const firstFrameUrl = URL.createObjectURL(firstFrameBlob);
     const firstImg = new Image();
-    
+
     firstImg.onload = () => {
-      ctx.drawImage(firstImg, 0, 0, width, height);
+      ctx.drawImage(firstImg, 0, 0, finalWidth, finalHeight);
       URL.revokeObjectURL(firstFrameUrl);
       frameIndex = 1;
       // 약간의 지연 후 다음 프레임 시작 (MediaRecorder가 초기화될 시간 확보)
@@ -142,4 +187,3 @@ export async function createVideoFromFrames(
     firstImg.src = firstFrameUrl;
   });
 }
-

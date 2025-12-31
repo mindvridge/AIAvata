@@ -104,9 +104,9 @@ function App() {
         isCollectingRef.current = false;
         collectedFramesRef.current = [];
         
-        // 프레임들을 비디오로 변환하고 캐시에 저장 (원본 비디오 크기: 784x1176)
+        // 프레임들을 비디오로 변환하고 캐시에 저장 (크기는 첫 번째 프레임에서 자동 감지)
         import('./utils/idleVideoCache').then(({ cacheIdleVideoFrames }) => {
-          cacheIdleVideoFrames(frames, currentEmotion, 784, 1176, 30).then(() => {
+          cacheIdleVideoFrames(frames, currentEmotion).then(() => {
             console.log(`%c✅ Idle 비디오 캐시 저장 완료: ${currentEmotion} (${frames.length} frames)`, 'color: green; font-weight: bold');
           }).catch(console.error);
         });
