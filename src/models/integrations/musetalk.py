@@ -982,6 +982,13 @@ class MuseTalkModel:
                     # numpy로 변환
                     result_frame = np.array(body_pil)[:, :, ::-1]  # RGB to BGR
                     
+                    # 크기 검증 (source_frame과 동일해야 함)
+                    result_h, result_w = result_frame.shape[:2]
+                    source_h, source_w = source_frame.shape[:2]
+                    if result_h != source_h or result_w != source_w:
+                        logger.warning(f"⚠️ MuseTalk 출력 크기 불일치: 결과={result_w}x{result_h}, 원본={source_w}x{source_h}, 리사이즈 적용")
+                        result_frame = cv2.resize(result_frame, (source_w, source_h), interpolation=cv2.INTER_CUBIC)
+                    
                     logger.info(f"✅ MuseTalk lip sync SUCCESS: output shape={result_frame.shape}")
                     return result_frame
 

@@ -749,8 +749,15 @@ class LivePortraitModel:
         except Exception as e:
             logger.debug(f"Pipeline execution error: {e}")
 
-        # 실패 시 원본 반환
-        return source_info.get("source_image", np.zeros((512, 512, 3), dtype=np.uint8))
+        # 실패 시 원본 반환 (source_image 크기 사용)
+        source_image = source_info.get("source_image")
+        if source_image is not None:
+            return source_image
+        else:
+            # source_image가 없으면 기본값 (하지만 일반적으로는 없어서는 안 됨)
+            logger.warning("source_image not found in source_info, using fallback")
+            # 최소한의 기본 크기 (하지만 실제로는 source_image가 있어야 함)
+            return np.zeros((1176, 784, 3), dtype=np.uint8)  # 784x1176 기본값
 
     async def _generate_frame_with_wrapper(
         self,

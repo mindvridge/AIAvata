@@ -51,8 +51,8 @@ export function AvatarView({
   frameData = null,
   onFrameData,
   onRecordingStateChange,
-  width: initialWidth = 512,
-  height: initialHeight = 512,
+  width: initialWidth = 784,
+  height: initialHeight = 1176,
 }: AvatarViewProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const localVideoRef = useRef<HTMLVideoElement>(null); // 로컬 idle 루프 비디오
@@ -60,7 +60,7 @@ export function AvatarView({
   const [useCanvas, setUseCanvas] = useState(!videoTrack);
   const canvasInitialized = useRef(false);
   const [useLocalVideo, setUseLocalVideo] = useState(false); // 로컬 비디오 사용 여부
-  // 🔑 동적 Canvas 크기 (첫 프레임에서 자동 감지)
+  // 🔑 동적 Canvas 크기 (첫 프레임에서 자동 감지, 기본값: 784x1176)
   const [canvasSize, setCanvasSize] = useState({ width: initialWidth, height: initialHeight });
   const { width, height } = canvasSize;
 

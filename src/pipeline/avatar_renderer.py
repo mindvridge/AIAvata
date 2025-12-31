@@ -900,12 +900,17 @@ class AvatarRenderer:
                 
                 # 프레임 크기가 output 크기와 다르면 리사이즈
                 if lipsync_frame.shape[1] != self.output_width or lipsync_frame.shape[0] != self.output_height:
-                    logger.debug(f"📐 프레임 크기 조정: {lipsync_frame.shape[1]}x{lipsync_frame.shape[0]} → {self.output_width}x{self.output_height}")
+                    logger.warning(f"⚠️ 프레임 크기 조정 필요: {lipsync_frame.shape[1]}x{lipsync_frame.shape[0]} → {self.output_width}x{self.output_height}")
                     lipsync_frame = cv2.resize(
                         lipsync_frame, 
                         (self.output_width, self.output_height),
                         interpolation=cv2.INTER_CUBIC
                     )
+                
+                # 🔑 리사이즈 후 최종 크기 검증
+                final_h, final_w = lipsync_frame.shape[:2]
+                if frame_index == 0:
+                    logger.info(f"📐 JPEG 인코딩 전 최종 프레임 크기: {final_w}x{final_h}, output_size={self.output_width}x{self.output_height}")
 
                 # JPEG 인코딩
                 _, encoded = cv2.imencode(
@@ -1005,15 +1010,25 @@ class AvatarRenderer:
                 audio_sample_rate=target_sample_rate,
             )
 
-            if lipsync_frame is not None and lipsync_frame.shape == frame.shape:
+            if lipsync_frame is None:
+                logger.error("❌ MuseTalk이 None을 반환했습니다. 내부 처리 오류입니다.")
+                return frame
+            
+            # MuseTalk 출력 크기 검증 및 리사이즈
+            if lipsync_frame.shape == frame.shape:
                 logger.debug(f"MuseTalk lip sync successful: output shape={lipsync_frame.shape}")
                 return lipsync_frame
             else:
-                if lipsync_frame is None:
-                    logger.error("❌ MuseTalk이 None을 반환했습니다. 내부 처리 오류입니다.")
-                else:
-                    logger.error(f"❌ MuseTalk 출력 shape 불일치: 예상={frame.shape}, 실제={lipsync_frame.shape}")
-                return frame
+                # 크기가 다르면 원본 프레임 크기로 리사이즈
+                logger.warning(f"⚠️ MuseTalk 출력 shape 불일치: 예상={frame.shape}, 실제={lipsync_frame.shape}, 리사이즈 적용")
+                h, w = frame.shape[:2]
+                lipsync_resized = cv2.resize(
+                    lipsync_frame, 
+                    (w, h),
+                    interpolation=cv2.INTER_CUBIC
+                )
+                logger.debug(f"✅ MuseTalk 출력 리사이즈 완료: {lipsync_frame.shape} → {lipsync_resized.shape}")
+                return lipsync_resized
 
         except Exception as e:
             logger.error(f"❌ MuseTalk 립싱크 실패: {e}", exc_info=True)
