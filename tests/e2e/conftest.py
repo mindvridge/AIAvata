@@ -99,19 +99,19 @@ def sample_speech_audio() -> np.ndarray:
 
 @pytest.fixture
 def sample_image() -> np.ndarray:
-    """Generate sample avatar image (512x512 RGB)."""
+    """Generate sample avatar image (784x1176 RGB - avata_ani.mp4 크기)."""
     # Create a simple face-like pattern
-    image = np.zeros((512, 512, 3), dtype=np.uint8)
+    image = np.zeros((1176, 784, 3), dtype=np.uint8)  # (height, width, channels)
 
     # Background
     image[:, :] = [200, 180, 160]  # Skin-like color
 
-    # Simple face circle
-    center = (256, 256)
-    for y in range(512):
-        for x in range(512):
+    # Simple face circle (중앙에 배치)
+    center = (392, 400)  # (width/2, 상단 1/3)
+    for y in range(1176):
+        for x in range(784):
             dist = np.sqrt((x - center[0])**2 + (y - center[1])**2)
-            if dist < 200:
+            if dist < 250:
                 image[y, x] = [220, 190, 170]
 
     return image

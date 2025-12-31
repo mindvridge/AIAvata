@@ -62,6 +62,6 @@ def sample_audio_bytes(sample_audio):
 
 @pytest.fixture
 def sample_video_frame():
-    """Generate sample video frame (512x512 RGB)"""
+    """Generate sample video frame (784x1176 RGB - avata_ani.mp4 크기)"""
     import numpy as np
-    return np.zeros((512, 512, 3), dtype=np.uint8)
+    return np.zeros((1176, 784, 3), dtype=np.uint8)  # (height, width, channels)
