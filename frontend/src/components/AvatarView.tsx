@@ -83,6 +83,7 @@ export function AvatarView({
 
     const localVideo = localVideoRef.current;
     const currentEmotion = emotion || 'neutral';
+    const emotionLabel = EMOTION_LABELS[currentEmotion] || currentEmotion;
     const videoUrl = `/avatars/avata_ani.mp4`; // avata_ani.mp4만 사용
     
     // WebSocket 프레임이 없을 때 로컬 비디오 재생 (idle, processing, listening 등)
@@ -90,7 +91,7 @@ export function AvatarView({
     const shouldPlayLocal = !frameData && (pipelineState === 'idle' || pipelineState === 'processing' || pipelineState === 'listening');
     
     if (shouldPlayLocal && !useLocalVideo) {
-      console.log(`%c🎬 로컬 비디오 재생 시작 시도: ${currentEmotion}`, 'color: blue; font-weight: bold');
+      console.log(`%c🎬 로컬 비디오 재생 시작 시도: ${emotionLabel}`, 'color: blue; font-weight: bold');
       
       // 먼저 캐시된 idle 비디오 확인
       import('../utils/idleVideoCache').then(({ getCachedIdleVideo }) => {
@@ -104,7 +105,7 @@ export function AvatarView({
           localVideo.muted = true;
           return localVideo.play().then(() => {
             setUseLocalVideo(true); // 재생 성공 후 상태 업데이트
-            console.log(`%c✅ 캐시된 idle 비디오 재생 시작: ${currentEmotion}`, 'color: green; font-weight: bold');
+            console.log(`%c✅ 캐시된 idle 비디오 재생 시작: ${emotionLabel}`, 'color: green; font-weight: bold');
           }).catch((err) => {
             console.error(`%c❌ 캐시된 비디오 재생 실패:`, 'color: red; font-weight: bold', err);
             URL.revokeObjectURL(blobUrl);
@@ -121,7 +122,7 @@ export function AvatarView({
                 localVideo.muted = true;
                 return localVideo.play().then(() => {
                   setUseLocalVideo(true); // 재생 성공 후 상태 업데이트
-                  console.log(`%c✅ 로컬 idle 비디오 재생 시작: ${currentEmotion}`, 'color: green; font-weight: bold');
+                  console.log(`%c✅ 로컬 idle 비디오 재생 시작: ${emotionLabel}`, 'color: green; font-weight: bold');
                 }).catch((err) => {
                   console.error(`%c❌ 로컬 비디오 재생 실패:`, 'color: red; font-weight: bold', err);
                 });
@@ -245,11 +246,19 @@ export function AvatarView({
       // 🔑 첫 프레임에서 Canvas 크기를 이미지 크기에 맞게 자동 조정 (찌그러짐 방지)
       const imgWidth = img.naturalWidth;
       const imgHeight = img.naturalHeight;
-      if (imgWidth > 0 && imgHeight > 0 && (canvas.width !== imgWidth || canvas.height !== imgHeight)) {
-        console.log(`🖼️ Canvas 크기 자동 조정: ${canvas.width}x${canvas.height} → ${imgWidth}x${imgHeight}`);
-        setCanvasSize({ width: imgWidth, height: imgHeight });
-        canvas.width = imgWidth;
-        canvas.height = imgHeight;
+      
+      // 이미지 크기가 유효한지 확인 (서버에서 전송된 실제 크기 사용)
+      if (imgWidth > 0 && imgHeight > 0) {
+        // Canvas 크기가 이미지 크기와 다르면 조정
+        if (canvas.width !== imgWidth || canvas.height !== imgHeight) {
+          console.log(`🖼️ Canvas 크기 자동 조정: ${canvas.width}x${canvas.height} → ${imgWidth}x${imgHeight} (이미지 실제 크기)`);
+          setCanvasSize({ width: imgWidth, height: imgHeight });
+          canvas.width = imgWidth;
+          canvas.height = imgHeight;
+        }
+      } else {
+        // 이미지 크기를 읽을 수 없으면 초기값 유지
+        console.warn(`🖼️ 이미지 크기를 읽을 수 없음: naturalWidth=${imgWidth}, naturalHeight=${imgHeight}, 초기 크기 유지: ${canvas.width}x${canvas.height}`);
       }
 
       const freshCtx = canvas.getContext('2d');

@@ -90,6 +90,18 @@ class Settings(BaseSettings):
         default=False,
         description="Use fast lip sync simulation instead of MuseTalk (faster but lower quality)"
     )
+    musetalk_use_tensorrt: bool = Field(
+        default=False,
+        description="Use TensorRT for MuseTalk inference (faster but requires TensorRT installation and engine compilation)"
+    )
+    musetalk_tensorrt_workspace_size: int = Field(
+        default=1024 * 1024 * 1024,  # 1GB
+        description="TensorRT workspace size in bytes (for engine optimization)"
+    )
+    musetalk_tensorrt_fp16: bool = Field(
+        default=True,
+        description="Use FP16 precision for TensorRT engines (faster, may slightly reduce quality)"
+    )
 
     # Idle Loop Settings
     idle_loop_cache_enabled: bool = Field(

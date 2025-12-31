@@ -213,10 +213,16 @@ class AvatarRenderer:
     async def _init_lipsync_model(self) -> None:
         """MuseTalk 립싱크 모델 초기화"""
         try:
+            # TensorRT 설정 가져오기
+            use_tensorrt = getattr(self._settings, 'musetalk_use_tensorrt', False) if self._settings else False
+            tensorrt_workspace_size = getattr(self._settings, 'musetalk_tensorrt_workspace_size', 1024 * 1024 * 1024) if self._settings else 1024 * 1024 * 1024
+            
             self._musetalk_model = MuseTalkModel(
                 model_dir="models/musetalk/musetalkV15",
                 device=self.device,
                 fp16=self.use_fp16,
+                use_tensorrt=use_tensorrt,
+                tensorrt_workspace_size=tensorrt_workspace_size,
             )
             success = await self._musetalk_model.initialize()
 
@@ -797,6 +803,15 @@ class AvatarRenderer:
 
             # 현재 idle 프레임 가져오기
             frame = self.get_idle_frame()
+            
+            # 프레임 크기가 output 크기와 다르면 리사이즈
+            if frame.shape[1] != self.output_width or frame.shape[0] != self.output_height:
+                logger.debug(f"📐 idle 프레임 크기 조정: {frame.shape[1]}x{frame.shape[0]} → {self.output_width}x{self.output_height}")
+                frame = cv2.resize(
+                    frame, 
+                    (self.output_width, self.output_height),
+                    interpolation=cv2.INTER_CUBIC
+                )
 
             # JPEG 인코딩
             _, encoded = cv2.imencode(
@@ -878,10 +893,19 @@ class AvatarRenderer:
                     base_frame, frame_audio, audio_sample_rate
                 )
 
-                # 🔑 립싱크 결과 크기 로깅 (디버그)
+                # 🔑 립싱크 결과 크기 로깅 및 리사이즈 (디버그)
                 if frame_index == 0:
                     lh, lw = lipsync_frame.shape[:2]
-                    logger.info(f"📐 render_with_audio: lipsync_frame={lw}x{lh}")
+                    logger.info(f"📐 render_with_audio: lipsync_frame={lw}x{lh}, target={self.output_width}x{self.output_height}")
+                
+                # 프레임 크기가 output 크기와 다르면 리사이즈
+                if lipsync_frame.shape[1] != self.output_width or lipsync_frame.shape[0] != self.output_height:
+                    logger.debug(f"📐 프레임 크기 조정: {lipsync_frame.shape[1]}x{lipsync_frame.shape[0]} → {self.output_width}x{self.output_height}")
+                    lipsync_frame = cv2.resize(
+                        lipsync_frame, 
+                        (self.output_width, self.output_height),
+                        interpolation=cv2.INTER_CUBIC
+                    )
 
                 # JPEG 인코딩
                 _, encoded = cv2.imencode(

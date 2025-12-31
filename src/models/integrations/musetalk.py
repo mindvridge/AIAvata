@@ -45,6 +45,8 @@ class MuseTalkModel:
         model_dir: str = MUSETALK_MODEL_DIR,
         device: str = "cuda",
         fp16: bool = True,
+        use_tensorrt: bool = False,
+        tensorrt_workspace_size: int = 1024 * 1024 * 1024,  # 1GB
     ):
         """
         Initialize MuseTalk Model.
@@ -53,14 +55,19 @@ class MuseTalkModel:
             model_dir: 모델 파일 디렉토리
             device: 연산 디바이스
             fp16: FP16 추론 사용 여부
+            use_tensorrt: TensorRT 사용 여부 (더 빠른 추론)
+            tensorrt_workspace_size: TensorRT 워크스페이스 크기 (바이트)
         """
         self.model_dir = Path(model_dir)
         self.device = device
         self.fp16 = fp16
+        self.use_tensorrt = use_tensorrt
+        self.tensorrt_workspace_size = tensorrt_workspace_size
 
         # 모델 컴포넌트
         self._audio_processor = None
         self._unet = None
+        self._unet_trt = None  # TensorRT 변환된 UNet
         self._vae = None
         self._face_parser = None
         self._positional_encoding = None  # PositionalEncoding for audio features
@@ -175,6 +182,56 @@ class MuseTalkModel:
                             device=device_obj
                         )
                         logger.info("UNet model loaded successfully")
+                        
+                        # TensorRT 변환 시도 (선택적)
+                        if self.use_tensorrt:
+                            try:
+                                from ...utils.tensorrt_utils import (
+                                    convert_unet_to_tensorrt,
+                                    check_tensorrt_available,
+                                )
+                                
+                                if check_tensorrt_available():
+                                    logger.info("🚀 Attempting TensorRT conversion for UNet...")
+                                    
+                                    # 엔진 저장 디렉토리
+                                    engine_dir = self.model_dir / "tensorrt_engines"
+                                    
+                                    # 샘플 입력 생성 (실제 추론 시 사용되는 형태)
+                                    sample_latent = torch.randn(
+                                        1, 8, 32, 32,
+                                        dtype=torch.float16 if self.fp16 else torch.float32,
+                                        device=device_obj
+                                    )
+                                    sample_timesteps = torch.tensor([0], dtype=torch.long, device=device_obj)
+                                    sample_encoder_hidden_states = torch.randn(
+                                        1, 50, 384,
+                                        dtype=torch.float16 if self.fp16 else torch.float32,
+                                        device=device_obj
+                                    )
+                                    
+                                    # TensorRT로 변환
+                                    self._unet_trt = convert_unet_to_tensorrt(
+                                        unet_model=self._unet.model,
+                                        sample_latent=sample_latent,
+                                        sample_timesteps=sample_timesteps,
+                                        sample_encoder_hidden_states=sample_encoder_hidden_states,
+                                        engine_dir=engine_dir,
+                                        fp16=self.fp16,
+                                        workspace_size=self.tensorrt_workspace_size,
+                                    )
+                                    
+                                    if self._unet_trt is not None:
+                                        logger.info("✅ UNet TensorRT conversion successful! Using TensorRT for inference.")
+                                    else:
+                                        logger.warning("⚠️ TensorRT conversion failed, falling back to PyTorch inference")
+                                else:
+                                    logger.warning("⚠️ TensorRT not available, using PyTorch inference")
+                            except Exception as e:
+                                logger.warning(f"⚠️ TensorRT conversion failed: {e}")
+                                logger.warning("Falling back to PyTorch inference")
+                                import traceback
+                                logger.debug(traceback.format_exc())
                         
                         # PositionalEncoding 초기화 (오디오 특징용)
                         from musetalk.models.unet import PositionalEncoding
@@ -517,16 +574,33 @@ class MuseTalkModel:
                 
                 try:
                     # UNet 추론 (MuseTalk realtime_inference.py 방식)
-                    # UNet2DConditionModel은 BaseOutput 객체를 반환하며 .sample 속성을 가짐
+                    # TensorRT가 있으면 사용, 없으면 PyTorch 모델 사용
                     logger.info(f"🔄 UNet inference starting - latent: {latent_input.shape}, audio: {audio_features.shape}")
-                    unet_output = self._unet.model(
-                        latent_input,
-                        timesteps,
-                        encoder_hidden_states=audio_features
-                    )
-
-                    # .sample 속성 접근 (UNet2DConditionModel의 반환값)
-                    pred_latents = unet_output.sample
+                    
+                    if self._unet_trt is not None:
+                        # TensorRT 추론
+                        logger.debug("Using TensorRT for UNet inference")
+                        # torch-tensorrt로 변환된 모델은 일반 PyTorch 모델처럼 사용 가능
+                        unet_output = self._unet_trt(
+                            latent_input,
+                            timesteps,
+                            audio_features  # encoder_hidden_states 대신 positional argument
+                        )
+                        # TensorRT 출력은 직접 tensor이거나 BaseOutput일 수 있음
+                        if hasattr(unet_output, 'sample'):
+                            pred_latents = unet_output.sample
+                        else:
+                            pred_latents = unet_output
+                    else:
+                        # PyTorch 추론
+                        logger.debug("Using PyTorch for UNet inference")
+                        unet_output = self._unet.model(
+                            latent_input,
+                            timesteps,
+                            encoder_hidden_states=audio_features
+                        )
+                        # .sample 속성 접근 (UNet2DConditionModel의 반환값)
+                        pred_latents = unet_output.sample
 
                     logger.info(f"✅ UNet output: {pred_latents.shape}")
                 except Exception as e:

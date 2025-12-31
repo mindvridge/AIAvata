@@ -469,7 +469,7 @@ function App() {
             </div>
 
             {/* Avatar view - 원본 비디오 비율 유지 (784x1176, 세로 비디오) */}
-            <div className="relative flex-shrink-0 flex items-center justify-center" style={{ maxHeight: '70vh', width: 'auto' }}>
+            <div className="relative flex-shrink-0 flex flex-col items-center gap-2 sm:gap-3" style={{ maxHeight: '70vh', width: 'auto' }}>
               <div style={{ aspectRatio: '784/1176', height: '70vh', maxHeight: '70vh' }}>
                 <AvatarView
                   emotion={emotion}
@@ -497,16 +497,16 @@ function App() {
                   />
                 </div>
               </div>
-            </div>
 
-            {/* Audio recorder - 작게 */}
-            <div className="w-full max-w-full sm:max-w-lg flex-shrink-0">
-              <AudioRecorder
-                onAudioData={handleAudioData}
-                isEnabled={isConnected && !isMuted}
-                size="md"
-                showLevel={false}
-              />
+              {/* Audio recorder - 아바타 바로 아래 */}
+              <div className="flex-shrink-0 mt-2 sm:mt-3">
+                <AudioRecorder
+                  onAudioData={handleAudioData}
+                  isEnabled={isConnected && !isMuted}
+                  size="md"
+                  showLevel={false}
+                />
+              </div>
             </div>
 
             {/* Chat input - 작게 */}
