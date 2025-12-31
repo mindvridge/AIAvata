@@ -84,7 +84,7 @@ class IdleLoopGenerator:
 
     def __init__(
         self,
-        output_size: Tuple[int, int] = (512, 512),
+        output_size: Tuple[int, int] = (784, 1176),  # avata_ani.mp4 크기에 맞춤
         fps: int = 30,
         duration: float = 5.0,
     ):
@@ -430,14 +430,14 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-    # 모든 감정의 idle 루프 생성
+    # 모든 감정의 idle 루프 생성 (기본 784x1176)
     python tools/generate_idle_loops.py --image avatar.jpg --output assets/idle_loops/
 
     # 특정 감정만 생성
     python tools/generate_idle_loops.py --image avatar.jpg --output assets/idle_loops/ --emotions neutral happy
 
-    # 고해상도로 생성
-    python tools/generate_idle_loops.py --image avatar.jpg --output assets/idle_loops/ --size 1024
+    # 사용자 정의 크기로 생성
+    python tools/generate_idle_loops.py --image avatar.jpg --output assets/idle_loops/ -W 1024 -H 1536
         """,
     )
 
@@ -474,11 +474,18 @@ Examples:
         help="Frame rate (default: 30)",
     )
     parser.add_argument(
-        "--size",
-        "-s",
+        "--width",
+        "-W",
         type=int,
-        default=512,
-        help="Output video size (default: 512)",
+        default=784,
+        help="Output video width (default: 784)",
+    )
+    parser.add_argument(
+        "--height",
+        "-H",
+        type=int,
+        default=1176,
+        help="Output video height (default: 1176)",
     )
 
     args = parser.parse_args()
@@ -490,7 +497,7 @@ Examples:
 
     # 생성기 초기화
     generator = IdleLoopGenerator(
-        output_size=(args.size, args.size),
+        output_size=(args.width, args.height),
         fps=args.fps,
         duration=args.duration,
     )
