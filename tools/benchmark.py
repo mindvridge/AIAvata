@@ -222,8 +222,8 @@ class BenchmarkRunner:
             from src.pipeline.avatar_renderer import AvatarRenderer
 
             renderer = AvatarRenderer(
-                output_width=512,
-                output_height=512,
+                output_width=784,
+                output_height=1176,
                 target_fps=30,
                 device=self.device,
             )
@@ -303,8 +303,8 @@ class BenchmarkRunner:
             model = MuseTalkModel(device=self.device, fp16=(self.device == "cuda"))
             await model.initialize()
 
-            # 테스트 데이터
-            test_frame = np.random.randint(0, 255, (512, 512, 3), dtype=np.uint8)
+            # 테스트 데이터 (avata_ani.mp4 크기: 784x1176)
+            test_frame = np.random.randint(0, 255, (1176, 784, 3), dtype=np.uint8)
             test_audio = self._generate_test_audio(0.033)  # 1프레임 분량
 
             times = []
@@ -345,13 +345,13 @@ class BenchmarkRunner:
 
             model = LivePortraitModel(
                 device=self.device,
-                output_size=(512, 512),
+                output_size=(784, 1176),
                 fp16=(self.device == "cuda"),
             )
             await model.initialize()
 
-            # 소스 이미지 설정
-            test_image = np.random.randint(0, 255, (512, 512, 3), dtype=np.uint8)
+            # 소스 이미지 설정 (avata_ani.mp4 크기)
+            test_image = np.random.randint(0, 255, (1176, 784, 3), dtype=np.uint8)
             await model.extract_source_features(test_image)
 
             times = []

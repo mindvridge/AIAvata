@@ -251,8 +251,8 @@ def draw_neck_and_shoulders(image: np.ndarray, center: tuple, size: int) -> np.n
 
 
 def create_avatar_image(
-    width: int = 512,
-    height: int = 512,
+    width: int = 784,
+    height: int = 1176,
     expression: str = "smile",
 ) -> np.ndarray:
     """
@@ -298,11 +298,18 @@ def main():
         help="Output image path (default: assets/avatars/sample_avatar.png)",
     )
     parser.add_argument(
-        "--size",
-        "-s",
+        "--width",
+        "-W",
         type=int,
-        default=512,
-        help="Image size (default: 512)",
+        default=784,
+        help="Image width (default: 784)",
+    )
+    parser.add_argument(
+        "--height",
+        "-H",
+        type=int,
+        default=1176,
+        help="Image height (default: 1176)",
     )
     parser.add_argument(
         "--expression",
@@ -319,10 +326,10 @@ def main():
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
     # 아바타 생성
-    logger.info(f"Creating sample avatar ({args.size}x{args.size})...")
+    logger.info(f"Creating sample avatar ({args.width}x{args.height})...")
     avatar = create_avatar_image(
-        width=args.size,
-        height=args.size,
+        width=args.width,
+        height=args.height,
         expression=args.expression,
     )
 
@@ -331,7 +338,7 @@ def main():
     logger.info(f"Saved avatar to: {output_path}")
 
     print(f"\nSample avatar created: {output_path}")
-    print(f"Size: {args.size}x{args.size}")
+    print(f"Size: {args.width}x{args.height}")
     print(f"Expression: {args.expression}")
     print("\nNext steps:")
     print(f"  1. Generate idle loops: python tools/generate_idle_loops.py --image {output_path}")
