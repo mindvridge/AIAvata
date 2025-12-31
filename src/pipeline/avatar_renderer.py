@@ -860,10 +860,20 @@ class AvatarRenderer:
                 # 현재 idle 프레임 가져오기
                 base_frame = self.get_idle_frame()
 
+                # 🔑 프레임 크기 로깅 (디버그)
+                if frame_index == 0:
+                    bh, bw = base_frame.shape[:2]
+                    logger.info(f"📐 render_with_audio: base_frame={bw}x{bh}, output_size={self.output_width}x{self.output_height}")
+
                 # 립싱크 적용
                 lipsync_frame = await self._apply_lipsync(
                     base_frame, frame_audio, audio_sample_rate
                 )
+
+                # 🔑 립싱크 결과 크기 로깅 (디버그)
+                if frame_index == 0:
+                    lh, lw = lipsync_frame.shape[:2]
+                    logger.info(f"📐 render_with_audio: lipsync_frame={lw}x{lh}")
 
                 # JPEG 인코딩
                 _, encoded = cv2.imencode(
