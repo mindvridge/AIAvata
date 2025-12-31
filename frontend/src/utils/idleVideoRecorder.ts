@@ -120,6 +120,9 @@ export async function createVideoFromFrames(
     });
 
     const chunks: Blob[] = [];
+    const frameInterval = 1000 / fps; // ms per frame
+    let frameIndex = 0;
+    let isRecording = false;
 
     mediaRecorder.ondataavailable = (event) => {
       if (event.data && event.data.size > 0) {
@@ -141,16 +144,10 @@ export async function createVideoFromFrames(
       reject(new Error('MediaRecorder error'));
     };
 
-    // 녹화 시작
-    mediaRecorder.start();
-
-    // 프레임들을 순차적으로 canvas에 그리기
-    let frameIndex = 0;
-    const frameInterval = 1000 / fps; // ms per frame
-
+    // 프레임을 순차적으로 canvas에 그리기
     const drawNextFrame = () => {
       if (frameIndex >= frames.length) {
-        // 모든 프레임을 그렸으면 녹화 중지
+        // 모든 프레임을 그렸으면 마지막 프레임 유지 후 녹화 중지
         setTimeout(() => {
           if (mediaRecorder.state !== 'inactive') {
             mediaRecorder.stop();
@@ -184,14 +181,30 @@ export async function createVideoFromFrames(
       img.src = url;
     };
 
-    // 첫 프레임 그리기 (이미 로드된 이미지가 있으면 재사용)
+    // 첫 프레임을 그리고 MediaRecorder 시작 후 다음 프레임 진행
+    const startRecording = (firstImg: HTMLImageElement, firstImgUrl: string) => {
+      // 먼저 첫 프레임을 Canvas에 그림
+      ctx.drawImage(firstImg, 0, 0, finalWidth, finalHeight);
+      URL.revokeObjectURL(firstImgUrl);
+
+      // MediaRecorder가 준비되면 녹화 시작
+      mediaRecorder.onstart = () => {
+        isRecording = true;
+        console.log('%c🎥 MediaRecorder 시작됨', 'color: green');
+
+        // 첫 프레임이 캡처될 시간을 주고 다음 프레임으로 진행
+        frameIndex = 1;
+        setTimeout(drawNextFrame, frameInterval);
+      };
+
+      // 녹화 시작
+      mediaRecorder.start();
+    };
+
+    // 첫 프레임 처리
     if (firstFrameInfo) {
       // 이미 로드된 첫 프레임 재사용
-      ctx.drawImage(firstFrameInfo.img, 0, 0, finalWidth, finalHeight);
-      URL.revokeObjectURL(firstFrameInfo.url);
-      frameIndex = 1;
-      // 약간의 지연 후 다음 프레임 시작 (MediaRecorder가 초기화될 시간 확보)
-      setTimeout(drawNextFrame, frameInterval);
+      startRecording(firstFrameInfo.img, firstFrameInfo.url);
     } else {
       // 첫 프레임을 새로 로드
       const firstFrameBlob = new Blob([frames[0]], { type: 'image/jpeg' });
@@ -199,10 +212,7 @@ export async function createVideoFromFrames(
       const firstImg = new Image();
 
       firstImg.onload = () => {
-        ctx.drawImage(firstImg, 0, 0, finalWidth, finalHeight);
-        URL.revokeObjectURL(firstFrameUrl);
-        frameIndex = 1;
-        setTimeout(drawNextFrame, frameInterval);
+        startRecording(firstImg, firstFrameUrl);
       };
 
       firstImg.onerror = () => {
