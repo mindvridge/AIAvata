@@ -311,6 +311,11 @@ class AvatarRenderer:
                     
                     frames = await self._load_video_frames(str(prerendered_path))
                     if frames:
+                        # 🔑 캐시된 프레임 크기 검증
+                        first_frame = frames[0]
+                        fh, fw = first_frame.shape[:2]
+                        logger.info(f"   📐 캐시된 프레임 크기: {fw}x{fh} (첫 번째 프레임)")
+
                         self._idle_loops[Emotion.NEUTRAL] = frames
                         self._idle_loops[Emotion.HAPPY] = frames
                         self._idle_loops[Emotion.SAD] = frames

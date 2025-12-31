@@ -357,6 +357,10 @@ class MuseTalkModel:
         if not self._initialized:
             await self.initialize()
 
+        # 🔑 입력 프레임 크기 로깅
+        h, w = source_frame.shape[:2]
+        logger.info(f"📐 MuseTalk process_frame 입력: {w}x{h}")
+
         # 모델이 로드되지 않았으면 에러 표시
         if self._unet is None:
             logger.error("❌ MuseTalk UNet 모델이 로드되지 않았습니다!")
