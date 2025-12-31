@@ -36,8 +36,8 @@ services:
       - LIVEPORTRAIT_MODEL_DIR=/app/models/liveportrait
       # Performance tuning
       - TARGET_FPS=${TARGET_FPS:-30}
-      - VIDEO_WIDTH=${VIDEO_WIDTH:-784}
-      - VIDEO_HEIGHT=${VIDEO_HEIGHT:-1176}
+      # VIDEO_WIDTH/HEIGHT: 자동 감지됨 (avata_ani.mp4에서)
+      # 환경변수로 오버라이드 가능: VIDEO_WIDTH, VIDEO_HEIGHT
       - TTS_SAMPLE_RATE=${TTS_SAMPLE_RATE:-24000}
       # Logging
       - LOG_LEVEL=${LOG_LEVEL:-INFO}

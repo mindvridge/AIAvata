@@ -41,8 +41,8 @@ services:
       - STT_MODEL_PATH=${STT_MODEL_PATH:-iic/SenseVoiceSmall}
       # Performance tuning (reduced for CPU)
       - TARGET_FPS=${TARGET_FPS:-15}
-      - VIDEO_WIDTH=${VIDEO_WIDTH:-256}
-      - VIDEO_HEIGHT=${VIDEO_HEIGHT:-256}
+      # VIDEO_WIDTH/HEIGHT: 자동 감지됨 (avata_ani.mp4에서)
+      # 환경변수로 오버라이드 가능: VIDEO_WIDTH, VIDEO_HEIGHT
       - TTS_SAMPLE_RATE=${TTS_SAMPLE_RATE:-24000}
       # Logging
       - LOG_LEVEL=${LOG_LEVEL:-INFO}

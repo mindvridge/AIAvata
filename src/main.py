@@ -49,10 +49,17 @@ async def lifespan(app: FastAPI):
     import os
     logger.info("=" * 60)
     logger.info("🔧 Settings 디버그 정보:")
-    logger.info(f"   video_width (from Settings): {settings.video_width}")
-    logger.info(f"   video_height (from Settings): {settings.video_height}")
-    logger.info(f"   VIDEO_WIDTH env var: {os.environ.get('VIDEO_WIDTH', 'NOT SET')}")
-    logger.info(f"   VIDEO_HEIGHT env var: {os.environ.get('VIDEO_HEIGHT', 'NOT SET')}")
+    width_env = os.environ.get('VIDEO_WIDTH', 'NOT SET')
+    height_env = os.environ.get('VIDEO_HEIGHT', 'NOT SET')
+
+    if settings.video_width is None and settings.video_height is None:
+        logger.info("   📐 video_width/height: AUTO-DETECT (비디오에서 자동 감지)")
+    else:
+        logger.info(f"   video_width (from Settings): {settings.video_width}")
+        logger.info(f"   video_height (from Settings): {settings.video_height}")
+
+    logger.info(f"   VIDEO_WIDTH env var: {width_env}")
+    logger.info(f"   VIDEO_HEIGHT env var: {height_env}")
     logger.info("=" * 60)
 
     logger.info("=" * 60)
