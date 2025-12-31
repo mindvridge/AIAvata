@@ -18,7 +18,7 @@ assets/
 
 ### 요구사항
 - 형식: PNG, JPG, JPEG
-- 권장 크기: 512x512 또는 1024x1024
+- 권장 크기: 784x1176 (세로 비율) 또는 원본 비율 유지
 - 정면 얼굴 사진 권장
 - 배경은 단색이면 좋음
 
@@ -57,8 +57,8 @@ python tools/generate_idle_loops.py --image assets/avatars/sample.png --emotions
 
 ### 요구사항
 - 형식: MP4 (H.264)
-- 프레임레이트: 30 FPS
-- 크기: 512x512
+- 프레임레이트: 24-30 FPS
+- 크기: 784x1176 (세로 비율) - 원본 비디오에서 자동 감지
 - 길이: 3-5초 (루프)
 
 ## 3. 음성 샘플 (voice_samples/)
