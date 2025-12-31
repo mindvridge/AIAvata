@@ -158,7 +158,9 @@ class AvatarWebSocketHandler:
         await websocket.accept()
         connection_id = id(websocket)
 
-        logger.info(f"WebSocket connected: {connection_id}")
+        logger.info("=" * 60)
+        logger.info(f"🔌 WebSocket 연결됨: connection_id={connection_id}")
+        logger.info("=" * 60)
 
         # 세션 ID 파싱
         uuid_session = None
@@ -674,7 +676,9 @@ class AvatarWebSocketHandler:
             return
 
         state_machine: ConnectionStateMachine = connection["state_machine"]
-        logger.info(f"Chat message received: {text[:50]}...")
+        logger.info("=" * 60)
+        logger.info(f"💬 채팅 메시지 수신: '{text[:50]}...'")
+        logger.info("=" * 60)
 
         # 🎬 idle 루프는 계속 재생 - TTS/립싱크 준비 완료까지 PROCESSING 전이 안 함
         # _process_chat_with_tts에서 프레임 준비 완료 후 SPEAKING으로 전이
