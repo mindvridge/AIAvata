@@ -5,17 +5,27 @@
 
 /**
  * JPEG 프레임에서 이미지 크기 자동 감지
+ * @returns Image 객체와 크기 정보 (재사용 가능)
  */
-async function getImageDimensions(frameData: ArrayBuffer): Promise<{ width: number; height: number }> {
+async function loadImageWithDimensions(frameData: ArrayBuffer): Promise<{
+  img: HTMLImageElement;
+  width: number;
+  height: number;
+  url: string;
+}> {
   return new Promise((resolve, reject) => {
     const blob = new Blob([frameData], { type: 'image/jpeg' });
     const url = URL.createObjectURL(blob);
     const img = new Image();
 
     img.onload = () => {
-      URL.revokeObjectURL(url);
       console.log(`%c📐 이미지 크기 자동 감지: ${img.naturalWidth}x${img.naturalHeight}`, 'color: blue; font-weight: bold');
-      resolve({ width: img.naturalWidth, height: img.naturalHeight });
+      resolve({
+        img,
+        width: img.naturalWidth,
+        height: img.naturalHeight,
+        url  // URL은 호출자가 revoke해야 함
+      });
     };
 
     img.onerror = () => {
@@ -41,24 +51,30 @@ export async function createVideoFromFrames(
     throw new Error('No frames to convert');
   }
 
-  // 크기가 제공되지 않으면 첫 번째 프레임에서 자동 감지
-  let actualWidth = width;
-  let actualHeight = height;
+  // 첫 번째 프레임을 로드하여 크기 감지 및 이미지 재사용
+  let firstFrameInfo: { img: HTMLImageElement; width: number; height: number; url: string } | null = null;
 
-  if (!actualWidth || !actualHeight) {
+  // 크기가 둘 다 제공되지 않은 경우만 자동 감지
+  // 하나라도 제공되지 않으면 자동 감지된 크기 사용
+  let finalWidth: number;
+  let finalHeight: number;
+
+  if (width !== undefined && height !== undefined) {
+    // 둘 다 제공됨 - 제공된 값 사용
+    finalWidth = width;
+    finalHeight = height;
+  } else {
+    // 하나라도 없으면 자동 감지
     try {
-      const dimensions = await getImageDimensions(frames[0]);
-      actualWidth = dimensions.width;
-      actualHeight = dimensions.height;
+      firstFrameInfo = await loadImageWithDimensions(frames[0]);
+      finalWidth = width ?? firstFrameInfo.width;
+      finalHeight = height ?? firstFrameInfo.height;
     } catch (error) {
       console.error('Failed to detect image dimensions, using fallback 784x1176:', error);
-      actualWidth = 784;
-      actualHeight = 1176;
+      finalWidth = width ?? 784;
+      finalHeight = height ?? 1176;
     }
   }
-
-  const finalWidth = actualWidth;
-  const finalHeight = actualHeight;
 
   return new Promise((resolve, reject) => {
     // Canvas 생성
@@ -67,6 +83,7 @@ export async function createVideoFromFrames(
     canvas.height = finalHeight;
     const ctx = canvas.getContext('2d');
     if (!ctx) {
+      if (firstFrameInfo) URL.revokeObjectURL(firstFrameInfo.url);
       reject(new Error('Failed to get canvas context'));
       return;
     }
@@ -92,6 +109,7 @@ export async function createVideoFromFrames(
     }
 
     if (!selectedMimeType) {
+      if (firstFrameInfo) URL.revokeObjectURL(firstFrameInfo.url);
       reject(new Error('WebM 형식을 지원하지 않는 브라우저입니다.'));
       return;
     }
@@ -166,24 +184,33 @@ export async function createVideoFromFrames(
       img.src = url;
     };
 
-    // 첫 프레임 그리기
-    const firstFrameBlob = new Blob([frames[0]], { type: 'image/jpeg' });
-    const firstFrameUrl = URL.createObjectURL(firstFrameBlob);
-    const firstImg = new Image();
-
-    firstImg.onload = () => {
-      ctx.drawImage(firstImg, 0, 0, finalWidth, finalHeight);
-      URL.revokeObjectURL(firstFrameUrl);
+    // 첫 프레임 그리기 (이미 로드된 이미지가 있으면 재사용)
+    if (firstFrameInfo) {
+      // 이미 로드된 첫 프레임 재사용
+      ctx.drawImage(firstFrameInfo.img, 0, 0, finalWidth, finalHeight);
+      URL.revokeObjectURL(firstFrameInfo.url);
       frameIndex = 1;
       // 약간의 지연 후 다음 프레임 시작 (MediaRecorder가 초기화될 시간 확보)
       setTimeout(drawNextFrame, frameInterval);
-    };
+    } else {
+      // 첫 프레임을 새로 로드
+      const firstFrameBlob = new Blob([frames[0]], { type: 'image/jpeg' });
+      const firstFrameUrl = URL.createObjectURL(firstFrameBlob);
+      const firstImg = new Image();
 
-    firstImg.onerror = () => {
-      URL.revokeObjectURL(firstFrameUrl);
-      reject(new Error('Failed to load first frame'));
-    };
+      firstImg.onload = () => {
+        ctx.drawImage(firstImg, 0, 0, finalWidth, finalHeight);
+        URL.revokeObjectURL(firstFrameUrl);
+        frameIndex = 1;
+        setTimeout(drawNextFrame, frameInterval);
+      };
 
-    firstImg.src = firstFrameUrl;
+      firstImg.onerror = () => {
+        URL.revokeObjectURL(firstFrameUrl);
+        reject(new Error('Failed to load first frame'));
+      };
+
+      firstImg.src = firstFrameUrl;
+    }
   });
 }
