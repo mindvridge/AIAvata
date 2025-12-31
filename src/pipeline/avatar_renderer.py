@@ -107,8 +107,13 @@ class AvatarRenderer:
             return
 
         logger.info("Initializing Avatar Renderer...")
+        logger.info(f"📐 초기 출력 크기: {self.output_width}x{self.output_height}")
 
-        # 소스 이미지 로드
+        # 🔑 Idle 루프 먼저 로드 (비디오 크기 감지를 위해)
+        await self._load_idle_loops()
+        logger.info(f"📐 비디오 감지 후 출력 크기: {self.output_width}x{self.output_height}")
+
+        # 소스 이미지 로드 (비디오 크기 감지 후)
         if self.avatar_image_path:
             await self._load_source_image()
 
@@ -121,11 +126,8 @@ class AvatarRenderer:
         # LivePortrait 모델 초기화
         await self._init_live_portrait_model()
 
-        # Idle 루프 로드 또는 생성
-        await self._load_idle_loops()
-
         self._initialized = True
-        logger.info("Avatar Renderer initialized successfully")
+        logger.info(f"Avatar Renderer initialized successfully (output: {self.output_width}x{self.output_height})")
 
     async def _load_source_image(self) -> None:
         """소스 아바타 이미지 로드"""
@@ -578,6 +580,8 @@ class AvatarRenderer:
             # 모든 루프가 없으면 기본 프레임 생성 (아바타 이미지 기반)
             if self._source_image is not None:
                 # 소스 이미지가 있으면 그대로 반환
+                h, w = self._source_image.shape[:2]
+                logger.debug(f"📐 get_idle_frame: source_image 사용 ({w}x{h})")
                 return self._source_image.copy()
             else:
                 # 소스 이미지도 없으면 회색 배경
@@ -615,6 +619,11 @@ class AvatarRenderer:
         frame_idx_in_loop = self._current_frame_idx % len(frames)
         frame = frames[frame_idx_in_loop]
         self._current_frame_idx += 1
+
+        # 첫 프레임만 크기 로깅
+        if frame_idx_in_loop == 0:
+            h, w = frame.shape[:2]
+            logger.debug(f"📐 get_idle_frame: idle_loop 프레임 ({w}x{h})")
 
         # 루프 끝에 도달했고, 대기 중이면 이벤트 발생
         if self._waiting_for_loop_end and self._loop_end_event:
