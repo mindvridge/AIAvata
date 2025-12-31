@@ -743,11 +743,8 @@ class AvatarRenderer:
                     logger.warning("비디오 프레임을 읽을 수 없습니다")
                     break
 
-                # 🔑 원본 크기 유지 (리사이즈는 출력 크기와 다를 때만)
-                # output_width, output_height가 원본과 동일하게 설정되므로 보통 리사이즈 불필요
-                if frame.shape[1] != self.output_width or frame.shape[0] != self.output_height:
-                    logger.debug(f"프레임 크기 조정: {frame.shape[1]}x{frame.shape[0]} → {self.output_width}x{self.output_height}")
-                    frame = cv2.resize(frame, (self.output_width, self.output_height))
+                # 🔑 원본 프레임 크기 그대로 사용 (Settings 무시, 비디오 원본 크기 유지)
+                frame_h, frame_w = frame.shape[:2]
 
                 # JPEG 인코딩
                 _, encoded = cv2.imencode(
@@ -756,8 +753,8 @@ class AvatarRenderer:
 
                 yield VideoFrame(
                     data=encoded.tobytes(),
-                    width=self.output_width,
-                    height=self.output_height,
+                    width=frame_w,  # 🔑 실제 프레임 크기 사용
+                    height=frame_h,  # 🔑 실제 프레임 크기 사용
                     timestamp=time.time(),
                     frame_index=frame_index,
                     encoding="jpeg",
@@ -803,15 +800,9 @@ class AvatarRenderer:
 
             # 현재 idle 프레임 가져오기
             frame = self.get_idle_frame()
-            
-            # 프레임 크기가 output 크기와 다르면 리사이즈
-            if frame.shape[1] != self.output_width or frame.shape[0] != self.output_height:
-                logger.debug(f"📐 idle 프레임 크기 조정: {frame.shape[1]}x{frame.shape[0]} → {self.output_width}x{self.output_height}")
-                frame = cv2.resize(
-                    frame, 
-                    (self.output_width, self.output_height),
-                    interpolation=cv2.INTER_CUBIC
-                )
+
+            # 🔑 원본 프레임 크기 그대로 사용 (Settings 무시, 비디오 원본 크기 유지)
+            frame_h, frame_w = frame.shape[:2]
 
             # JPEG 인코딩
             _, encoded = cv2.imencode(
@@ -820,8 +811,8 @@ class AvatarRenderer:
 
             yield VideoFrame(
                 data=encoded.tobytes(),
-                width=self.output_width,
-                height=self.output_height,
+                width=frame_w,  # 🔑 실제 프레임 크기 사용
+                height=frame_h,  # 🔑 실제 프레임 크기 사용
                 timestamp=time.time(),
                 frame_index=frame_index,
                 encoding="jpeg",
@@ -883,34 +874,40 @@ class AvatarRenderer:
                 # 현재 idle 프레임 가져오기
                 base_frame = self.get_idle_frame()
 
+                # 🔑 원본 프레임 크기를 기준으로 사용 (Settings 값 무시)
+                # Settings 환경변수가 잘못 설정되어도 원본 비디오 크기 유지
+                target_h, target_w = base_frame.shape[:2]
+
                 # 🔑 프레임 크기 로깅 (디버그)
                 if frame_index == 0:
-                    bh, bw = base_frame.shape[:2]
-                    logger.info(f"📐 render_with_audio: base_frame={bw}x{bh}, output_size={self.output_width}x{self.output_height}")
+                    logger.info(f"📐 render_with_audio: base_frame={target_w}x{target_h}, Settings output_size={self.output_width}x{self.output_height}")
+                    # Settings 값과 실제 프레임 크기가 다르면 경고
+                    if target_w != self.output_width or target_h != self.output_height:
+                        logger.warning(f"⚠️ Settings output_size({self.output_width}x{self.output_height})가 비디오 크기({target_w}x{target_h})와 다름! 비디오 크기 사용")
 
                 # 립싱크 적용
                 lipsync_frame = await self._apply_lipsync(
                     base_frame, frame_audio, audio_sample_rate
                 )
 
-                # 🔑 립싱크 결과 크기 로깅 및 리사이즈 (디버그)
+                # 🔑 립싱크 결과 크기 로깅 (디버그)
                 if frame_index == 0:
                     lh, lw = lipsync_frame.shape[:2]
-                    logger.info(f"📐 render_with_audio: lipsync_frame={lw}x{lh}, target={self.output_width}x{self.output_height}")
-                
-                # 프레임 크기가 output 크기와 다르면 리사이즈
-                if lipsync_frame.shape[1] != self.output_width or lipsync_frame.shape[0] != self.output_height:
-                    logger.warning(f"⚠️ 프레임 크기 조정 필요: {lipsync_frame.shape[1]}x{lipsync_frame.shape[0]} → {self.output_width}x{self.output_height}")
+                    logger.info(f"📐 render_with_audio: lipsync_frame={lw}x{lh}, target={target_w}x{target_h}")
+
+                # 🔑 프레임 크기가 base_frame 크기와 다르면 리사이즈 (Settings 무시, 원본 비디오 크기 사용)
+                if lipsync_frame.shape[1] != target_w or lipsync_frame.shape[0] != target_h:
+                    logger.warning(f"⚠️ 프레임 크기 조정: {lipsync_frame.shape[1]}x{lipsync_frame.shape[0]} → {target_w}x{target_h}")
                     lipsync_frame = cv2.resize(
-                        lipsync_frame, 
-                        (self.output_width, self.output_height),
+                        lipsync_frame,
+                        (target_w, target_h),
                         interpolation=cv2.INTER_CUBIC
                     )
-                
-                # 🔑 리사이즈 후 최종 크기 검증
+
+                # 🔑 최종 크기 검증
                 final_h, final_w = lipsync_frame.shape[:2]
                 if frame_index == 0:
-                    logger.info(f"📐 JPEG 인코딩 전 최종 프레임 크기: {final_w}x{final_h}, output_size={self.output_width}x{self.output_height}")
+                    logger.info(f"📐 JPEG 인코딩 전 최종 프레임 크기: {final_w}x{final_h}")
 
                 # JPEG 인코딩
                 _, encoded = cv2.imencode(
@@ -919,8 +916,8 @@ class AvatarRenderer:
 
                 yield VideoFrame(
                     data=encoded.tobytes(),
-                    width=self.output_width,
-                    height=self.output_height,
+                    width=final_w,  # 🔑 실제 프레임 크기 사용 (Settings 무시)
+                    height=final_h,  # 🔑 실제 프레임 크기 사용 (Settings 무시)
                     timestamp=time.time(),
                     frame_index=frame_index,
                     encoding="jpeg",

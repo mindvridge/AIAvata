@@ -45,6 +45,16 @@ async def lifespan(app: FastAPI):
 
     settings = get_settings()
 
+    # 🔑 Settings 디버그 로깅 (환경 변수 확인)
+    import os
+    logger.info("=" * 60)
+    logger.info("🔧 Settings 디버그 정보:")
+    logger.info(f"   video_width (from Settings): {settings.video_width}")
+    logger.info(f"   video_height (from Settings): {settings.video_height}")
+    logger.info(f"   VIDEO_WIDTH env var: {os.environ.get('VIDEO_WIDTH', 'NOT SET')}")
+    logger.info(f"   VIDEO_HEIGHT env var: {os.environ.get('VIDEO_HEIGHT', 'NOT SET')}")
+    logger.info("=" * 60)
+
     logger.info("=" * 60)
     logger.info("Starting Realtime AI Avatar Service")
     logger.info("=" * 60)

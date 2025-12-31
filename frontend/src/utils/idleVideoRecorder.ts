@@ -8,8 +8,8 @@
  */
 export async function createVideoFromFrames(
   frames: ArrayBuffer[],
-  width: number = 512,
-  height: number = 512,
+  width: number = 784,  // 원본 비디오 크기 (avata_ani.mp4)
+  height: number = 1176,  // 원본 비디오 크기 (avata_ani.mp4)
   fps: number = 30
 ): Promise<Blob> {
   return new Promise((resolve, reject) => {
