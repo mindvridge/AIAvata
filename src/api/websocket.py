@@ -561,9 +561,9 @@ class AvatarWebSocketHandler:
 
                 try:
                     frame_count += 1
-                    # 처음 몇 프레임은 INFO 레벨로 로깅
+                    # 처음 몇 프레임은 INFO 레벨로 로깅 (크기 정보 포함)
                     if frame_count <= 3:
-                        logger.info(f"🎬 Idle frame #{frame_count} sent ({len(frame.data)} bytes)")
+                        logger.info(f"🎬 Idle frame #{frame_count}: {frame.width}x{frame.height}, {len(frame.data)} bytes")
                     elif frame_count % 30 == 0:  # 매 30프레임마다 로그
                         logger.info(f"🎬 Sent {frame_count} idle frames to connection {connection_id}")
 
@@ -851,12 +851,17 @@ class AvatarWebSocketHandler:
                 audio_generator = self._make_audio_stream_generator(audio_bytes, chunk_size)
                 
                 video_frames = []
+                first_frame_logged = False
                 try:
                     async for frame in self.pipeline.renderer.render_with_audio(
                         audio_stream=audio_generator(),
                         audio_sample_rate=self.pipeline.tts.sample_rate,
                     ):
                         video_frames.append(frame.data)
+                        # 🔑 첫 번째 프레임 크기 로깅 (512x512 문제 디버그)
+                        if not first_frame_logged:
+                            first_frame_logged = True
+                            logger.info(f"📐 [WebSocket] 첫 번째 립싱크 프레임: {frame.width}x{frame.height}, JPEG bytes: {len(frame.data)}")
                 except Exception as e:
                     import traceback
                     error_trace = traceback.format_exc()
