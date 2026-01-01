@@ -71,8 +71,9 @@ export function useAvatarSession(
         for (let i = 0; i < binaryString.length; i++) {
           audioView[i] = binaryString.charCodeAt(i);
         }
-        console.log(`%c✅ 오디오 데이터 수신 및 디코딩 완료: ${audioArrayBuffer.byteLength} bytes, ${message.sample_rate || 24000}Hz`, 'color: green; font-weight: bold');
-        onAudioData?.(audioArrayBuffer, message.sample_rate || 24000);
+        const audioDelayMs = message.audio_delay_ms || 0;
+        console.log(`%c✅ 오디오 데이터 수신 및 디코딩 완료: ${audioArrayBuffer.byteLength} bytes, ${message.sample_rate || 24000}Hz, delay=${audioDelayMs}ms`, 'color: green; font-weight: bold');
+        onAudioData?.(audioArrayBuffer, message.sample_rate || 24000, audioDelayMs);
       } catch (error) {
         const errorMsg = error instanceof Error ? error.message : String(error);
         console.error('%c❌ 오디오 데이터 디코딩 실패:', 'color: red; font-weight: bold; font-size: 14px', error);

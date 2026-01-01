@@ -209,9 +209,9 @@ function App() {
   }, [addError]);
 
   // Handle audio data from server - AudioWaveform에 전달 + 오디오 재생
-  const handleAudioDataFromServer = useCallback((data: ArrayBuffer, sampleRate: number) => {
-    console.log(`%c📥 오디오 데이터 수신: ${data.byteLength} bytes, ${sampleRate}Hz`, 'color: blue; font-weight: bold');
-    
+  const handleAudioDataFromServer = useCallback((data: ArrayBuffer, sampleRate: number, delayMs: number = 0) => {
+    console.log(`%c📥 오디오 데이터 수신: ${data.byteLength} bytes, ${sampleRate}Hz, delay=${delayMs}ms`, 'color: blue; font-weight: bold');
+
     setAudioData(data);
 
     // 오디오 레벨 계산 (간단한 방식)
@@ -230,11 +230,18 @@ function App() {
       addWarning(`오디오 레벨 계산 실패: ${errorMsg}`, 'Audio');
     }
 
-    // 오디오를 큐에 추가
-    audioQueueRef.current.push({ data, sampleRate });
-    
-    // 큐 처리 시작
-    processAudioQueue();
+    // 🔑 오디오 재생 지연 적용 (립싱크 동기화)
+    const addToQueue = () => {
+      audioQueueRef.current.push({ data, sampleRate });
+      processAudioQueue();
+    };
+
+    if (delayMs > 0) {
+      console.log(`%c⏱️ 오디오 재생 ${delayMs}ms 지연 시작`, 'color: orange; font-weight: bold');
+      setTimeout(addToQueue, delayMs);
+    } else {
+      addToQueue();
+    }
   }, [addError, addWarning, processAudioQueue]);
 
   // Handle chat response from WebSocket

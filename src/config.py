@@ -90,6 +90,10 @@ class Settings(BaseSettings):
         default=False,
         description="Use fast lip sync simulation instead of MuseTalk (faster but lower quality)"
     )
+    audio_sync_delay_ms: int = Field(
+        default=150,
+        description="Audio playback delay in milliseconds for lip sync synchronization (higher = video leads audio)"
+    )
     musetalk_use_tensorrt: bool = Field(
         default=False,
         description="Use TensorRT for MuseTalk inference (faster but requires TensorRT installation and engine compilation)"

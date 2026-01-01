@@ -1040,6 +1040,7 @@ class AvatarWebSocketHandler:
 
                 # 오디오 데이터 전송 (문장별로 전송 - 비디오 프레임 생성 완료 후)
                 audio_base64 = base64.b64encode(audio_bytes).decode('utf-8')
+                audio_sync_delay = getattr(self.pipeline.settings, 'audio_sync_delay_ms', 150)
                 await self._send_json(websocket, {
                     "type": "audio_data",
                     "data": audio_base64,
@@ -1047,6 +1048,7 @@ class AvatarWebSocketHandler:
                     "frame_count": len(video_frames),
                     "sentence_index": idx,
                     "total_sentences": total,
+                    "audio_delay_ms": audio_sync_delay,  # 클라이언트에서 오디오 재생 지연
                 })
 
                 logger.info(f"🔊 문장 {idx+1}/{total} 오디오 전송, 비디오 스트리밍 시작...")
