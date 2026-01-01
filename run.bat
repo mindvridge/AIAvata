@@ -88,33 +88,6 @@ echo       ⚠️ Git이 설치되지 않아 자동 업데이트 건너뜀
 
 :git_done
 
-REM Clean Python cache (to ensure latest code is used)
-echo       Python 캐시 정리 중...
-
-REM Delete ALL __pycache__ folders recursively (most thorough method)
-for /d /r . %%d in (__pycache__) do (
-    if exist "%%d" (
-        echo       삭제: %%d
-        rmdir /s /q "%%d" 2>nul
-    )
-)
-
-REM Delete ALL .pyc files directly
-for /r . %%f in (*.pyc) do (
-    if exist "%%f" (
-        del /f /q "%%f" 2>nul
-    )
-)
-
-REM Delete .pyo files as well
-for /r . %%f in (*.pyo) do (
-    if exist "%%f" (
-        del /f /q "%%f" 2>nul
-    )
-)
-
-echo       ✅ Python 캐시 정리 완료 (모든 __pycache__ 및 .pyc/.pyo 삭제)
-
 REM ============================================================
 REM 1. Python check
 REM ============================================================
