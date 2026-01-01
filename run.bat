@@ -984,51 +984,12 @@ REM ============================================================
 echo.
 echo [9/10] 서버 시작 중...
 
-REM 🔑 Kill any existing process using port 8000/5173 (prevent port conflict error)
+REM 🔑 기존 서버 프로세스 종료 (간단한 방식)
 echo       기존 서버 프로세스 종료 중...
-
-REM Method 1: Kill by window title first (most reliable)
 taskkill /F /FI "WINDOWTITLE eq Backend - AI Avatar" >nul 2>&1
 taskkill /F /FI "WINDOWTITLE eq Frontend - AI Avatar" >nul 2>&1
-
-REM Method 2: Kill by port with retry limit (only LISTENING state matters)
-set KILL_RETRY=0
-:kill_port_loop
-set /a KILL_RETRY+=1
-if %KILL_RETRY% GTR 5 (
-    echo       ⚠️ 5회 재시도 후에도 포트 종료 실패.
-    echo       TIME_WAIT 상태일 수 있습니다. 30초 후 재시도하거나
-    echo       작업관리자에서 python.exe를 종료하세요.
-    pause
-    goto kill_port_done
-)
-
-REM Only look for LISTENING connections (not TIME_WAIT)
-for /f "tokens=5" %%a in ('netstat -ano 2^>nul ^| findstr ":8000.*LISTENING"') do (
-    if not "%%a"=="0" (
-        echo       포트 8000 LISTENING 프로세스 종료: PID %%a
-        taskkill /F /PID %%a 2>&1
-    )
-)
-for /f "tokens=5" %%a in ('netstat -ano 2^>nul ^| findstr ":5173.*LISTENING"') do (
-    if not "%%a"=="0" (
-        echo       포트 5173 LISTENING 프로세스 종료: PID %%a
-        taskkill /F /PID %%a 2>&1
-    )
-)
-
-REM Wait for ports to be released
-timeout /t 2 /nobreak >nul
-
-REM Verify port 8000 is free (only check LISTENING state)
-netstat -ano 2>nul | findstr ":8000.*LISTENING" >nul 2>&1
-if not errorlevel 1 (
-    echo       ⚠️ 포트 8000 여전히 LISTENING 중, 재시도 %KILL_RETRY%/5...
-    goto kill_port_loop
-)
-
-:kill_port_done
-echo       ✅ 포트 정리 완료
+timeout /t 1 /nobreak >nul
+echo       ✅ 완료
 echo.
 echo ============================================================
 echo   백엔드 API:  http://localhost:8000
