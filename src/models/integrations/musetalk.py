@@ -712,19 +712,19 @@ class MuseTalkModel:
                 # VAE 출력과 원본의 차이 로깅
                 diff = result_256.astype(np.float32) - source_256.astype(np.float32)
 
-                # 🔑 입 영역 좌표 수정 (256x256 기준, 더 아래로 + 더 넓게)
-                # MuseTalk 표준: 입은 이미지 하단 65-88% 위치
-                mouth_y1, mouth_y2 = 168, 225  # Y: 168-225 (중심 196.5, 기존 155-215보다 아래)
-                mouth_x1, mouth_x2 = 75, 181   # X: 75-181 (중심 128, 기존보다 약간 넓게)
+                # 🔑 입 영역 좌표 수정 (256x256 기준)
+                # 위치를 위쪽으로 조정 (168-225 → 150-210)
+                mouth_y1, mouth_y2 = 150, 210  # Y: 150-210 (중심 180)
+                mouth_x1, mouth_x2 = 70, 186   # X: 70-186 (중심 128, 더 넓게)
 
                 mouth_region_diff = np.abs(diff[mouth_y1:mouth_y2, mouth_x1:mouth_x2])  # 입 영역만
                 avg_diff_mouth = np.mean(mouth_region_diff)
                 max_diff_mouth = np.max(mouth_region_diff)
 
                 # 🔑 차이가 작으면 입 영역만 부드럽게 증폭
-                if avg_diff_mouth < 20.0:
-                    # 증폭 계수 조정 (1.5~1.8배) - 입 벌림 더 확실하게
-                    amplify_factor = max(1.5, min(1.8, 30.0 / max(avg_diff_mouth, 1.0)))
+                if avg_diff_mouth < 25.0:
+                    # 증폭 계수 증가 (1.8~2.5배) - 입 벌림 더 확실하게
+                    amplify_factor = max(1.8, min(2.5, 40.0 / max(avg_diff_mouth, 1.0)))
 
                     # 입 영역만 선택적 증폭 (마스크 생성)
                     mouth_mask = np.zeros((256, 256), dtype=np.float32)
@@ -736,8 +736,8 @@ class MuseTalkModel:
                             dy = (y - (mouth_y1 + mouth_y2) // 2) / ((mouth_y2 - mouth_y1) / 2)
                             dx = (x - (mouth_x1 + mouth_x2) // 2) / ((mouth_x2 - mouth_x1) / 2)
                             dist = np.sqrt(dx**2 + dy**2)
-                            # 0.9로 부드러운 페이드 (기존 1.2는 너무 급격함)
-                            mouth_mask[y, x] = max(0, 1.0 - dist * 0.9)
+                            # 0.8로 더 부드러운 페이드
+                            mouth_mask[y, x] = max(0, 1.0 - dist * 0.8)
                     
                     # 입 영역만 증폭 적용
                     diff_selective = diff.copy()
