@@ -987,9 +987,16 @@ echo [9/10] 서버 시작 중...
 REM 🔑 Kill any existing process using port 8000/5173 (prevent port conflict error)
 echo       기존 서버 프로세스 종료 중...
 
-REM Method 1: Kill by port (netstat)
+REM Method 1: Kill by window title first (most reliable)
+taskkill /F /FI "WINDOWTITLE eq Backend - AI Avatar" >nul 2>&1
+taskkill /F /FI "WINDOWTITLE eq Frontend - AI Avatar" >nul 2>&1
+
+REM Method 2: Kill by port (netstat) - try multiple times
+:kill_port_loop
+set PORT_IN_USE=0
 for /f "tokens=5" %%a in ('netstat -ano 2^>nul ^| findstr ":8000 "') do (
     if not "%%a"=="0" (
+        set PORT_IN_USE=1
         echo       포트 8000 사용 중인 프로세스 종료: PID %%a
         taskkill /PID %%a /F >nul 2>&1
     )
@@ -1001,12 +1008,21 @@ for /f "tokens=5" %%a in ('netstat -ano 2^>nul ^| findstr ":5173 "') do (
     )
 )
 
-REM Method 2: Kill any existing uvicorn/node processes (fallback)
-taskkill /F /FI "WINDOWTITLE eq Backend - AI Avatar" >nul 2>&1
-taskkill /F /FI "WINDOWTITLE eq Frontend - AI Avatar" >nul 2>&1
+REM Method 3: Kill all Python uvicorn processes
+taskkill /F /IM python.exe /FI "WINDOWTITLE eq Backend*" >nul 2>&1
 
+REM Wait for ports to be released
 timeout /t 2 /nobreak >nul
-echo       ✅ 기존 프로세스 정리 완료
+
+REM Verify port 8000 is free
+netstat -ano 2>nul | findstr ":8000 " >nul 2>&1
+if not errorlevel 1 (
+    echo       ⚠️ 포트 8000 여전히 사용 중, 재시도...
+    timeout /t 2 /nobreak >nul
+    goto kill_port_loop
+)
+
+echo       ✅ 기존 프로세스 정리 완료 (포트 사용 가능)
 echo.
 echo ============================================================
 echo   백엔드 API:  http://localhost:8000
