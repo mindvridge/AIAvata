@@ -1000,11 +1000,12 @@ if exist "C:\Program Files (x86)\eSpeak NG\espeak-ng.exe" set "ESPEAK_PATH=C:\Pr
 REM Start backend in new window (with eSpeak-ng PATH, torch.compile disabled)
 REM TORCHDYNAMO_DISABLE=1: Prevents Triton warning on Windows
 REM --log-level info: INFO 레벨 로그 활성화 (Python logging 설정과 호환)
+REM 🔑 --reload 제거: reload 모드에서는 자식 프로세스 로그가 안 보이는 문제 해결
 if defined ESPEAK_PATH (
-    start "Backend - AI Avatar" cmd /k "cd /d %~dp0 && set PATH=%ESPEAK_PATH%;%PATH% && set PHONEMIZER_ESPEAK_LIBRARY=%ESPEAK_PATH%\libespeak-ng.dll && set TORCHDYNAMO_DISABLE=1 && set PYTHONUNBUFFERED=1 && python -u -m uvicorn src.main:app --host 0.0.0.0 --port 8000 --reload --log-level info"
+    start "Backend - AI Avatar" cmd /k "cd /d %~dp0 && set PATH=%ESPEAK_PATH%;%PATH% && set PHONEMIZER_ESPEAK_LIBRARY=%ESPEAK_PATH%\libespeak-ng.dll && set TORCHDYNAMO_DISABLE=1 && set PYTHONUNBUFFERED=1 && python -u -m uvicorn src.main:app --host 0.0.0.0 --port 8000 --log-level info"
 ) else (
     echo       [경고] eSpeak-ng가 설치되지 않았습니다. Zonos TTS가 작동하지 않을 수 있습니다.
-    start "Backend - AI Avatar" cmd /k "cd /d %~dp0 && set TORCHDYNAMO_DISABLE=1 && set PYTHONUNBUFFERED=1 && python -u -m uvicorn src.main:app --host 0.0.0.0 --port 8000 --reload --log-level info"
+    start "Backend - AI Avatar" cmd /k "cd /d %~dp0 && set TORCHDYNAMO_DISABLE=1 && set PYTHONUNBUFFERED=1 && python -u -m uvicorn src.main:app --host 0.0.0.0 --port 8000 --log-level info"
 )
 
 REM Wait for backend server to be ready
