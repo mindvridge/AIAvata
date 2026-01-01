@@ -4,6 +4,9 @@ Main FastAPI Application for Realtime AI Avatar Service.
 실시간 AI 아바타 서비스 메인 엔트리포인트
 """
 
+# 🔑 CODE VERSION MARKER - 이 버전이 출력되면 최신 코드가 실행 중인 것입니다
+CODE_VERSION = "2026-01-01-v2-FRAME-SIZE-FIX"
+
 import asyncio
 import logging
 import sys
@@ -139,6 +142,10 @@ async def lifespan(app: FastAPI):
 
     logger.info("=" * 60)
     logger.info("Starting Realtime AI Avatar Service")
+    logger.info(f"🔑 CODE VERSION: {CODE_VERSION}")
+    print(f"\n{'='*60}", flush=True)
+    print(f"🔑 CODE VERSION: {CODE_VERSION}", flush=True)
+    print(f"{'='*60}\n", flush=True)
     logger.info("=" * 60)
 
     try:

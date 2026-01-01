@@ -629,18 +629,49 @@ class AvatarWebSocketHandler:
 
                 try:
                     frame_count += 1
-                    # 🔑 프레임 크기 강제 출력 (로그가 안 보일 수 있으므로 print도 사용)
+
+                    # 🔑 WebSocket 전송 직전 최종 프레임 크기 검증 및 강제 리사이즈
+                    # JPEG 디코딩 → 크기 확인 → 필요시 리사이즈 → 재인코딩
+                    frame_data = frame.data
+                    import cv2
+                    import numpy as np
+
+                    # JPEG 디코딩하여 실제 크기 확인
+                    np_arr = np.frombuffer(frame_data, np.uint8)
+                    decoded_frame = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
+
+                    if decoded_frame is not None:
+                        actual_h, actual_w = decoded_frame.shape[:2]
+                        target_w, target_h = 784, 1176  # 원본 비디오 크기 (avata_ani.mp4)
+
+                        # 🔑 512x512 또는 잘못된 크기 감지 시 강제 리사이즈
+                        if actual_w != target_w or actual_h != target_h:
+                            if frame_count <= 3 or frame_count % 30 == 0:
+                                print(f"[WEBSOCKET RESIZE] Frame #{frame_count}: {actual_w}x{actual_h} → {target_w}x{target_h}", flush=True)
+                                logger.warning(f"⚠️ [WebSocket] 프레임 크기 불일치 감지: {actual_w}x{actual_h} → {target_w}x{target_h}로 강제 리사이즈")
+
+                            # 강제 리사이즈
+                            resized_frame = cv2.resize(decoded_frame, (target_w, target_h), interpolation=cv2.INTER_CUBIC)
+
+                            # JPEG 재인코딩
+                            _, encoded = cv2.imencode(".jpg", resized_frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
+                            frame_data = encoded.tobytes()
+
+                            if frame_count <= 3:
+                                print(f"[WEBSOCKET RESIZE DONE] Frame #{frame_count}: Now {target_w}x{target_h}, {len(frame_data)} bytes", flush=True)
+                        elif frame_count <= 3:
+                            print(f"[FRAME #{frame_count}] OK: {actual_w}x{actual_h}, {len(frame_data)} bytes", flush=True)
+                    else:
+                        # 디코딩 실패 시 원본 사용
+                        if frame_count <= 3:
+                            print(f"[WARNING] Frame #{frame_count}: JPEG decode failed, sending original", flush=True)
+
                     if frame_count <= 3:
-                        print(f"[FRAME #{frame_count}] Width={frame.width}, Height={frame.height}, Bytes={len(frame.data)}", flush=True)
-                        logger.info(f"🎬 Idle frame #{frame_count}: {frame.width}x{frame.height}, {len(frame.data)} bytes")
-                        # 🔑 512x512 프레임 감지 시 경고
-                        if frame.width == 512 and frame.height == 512:
-                            print(f"[ERROR] 512x512 프레임 감지! Frame #{frame_count}", flush=True)
-                            logger.error(f"❌ 512x512 프레임 감지! Frame #{frame_count}: {frame.width}x{frame.height}")
-                    elif frame_count % 30 == 0:  # 매 30프레임마다 로그
+                        logger.info(f"🎬 Idle frame #{frame_count}: sending {len(frame_data)} bytes")
+                    elif frame_count % 30 == 0:
                         logger.info(f"🎬 Sent {frame_count} idle frames to connection {connection_id}")
 
-                    await websocket.send_bytes(frame.data)
+                    await websocket.send_bytes(frame_data)
                 except Exception as e:
                     logger.error(f"Error sending idle frame: {e}")
                     break
@@ -1001,12 +1032,34 @@ class AvatarWebSocketHandler:
                 logger.info(f"🔊 문장 {idx+1}/{total} 오디오 전송, 비디오 스트리밍 시작...")
 
                 # 비디오 프레임을 FPS에 맞춰 전송 (오디오와 동기화)
+                lipsync_frame_idx = 0
                 for frame_data in video_frames:
                     frame_start = time.time()
+                    lipsync_frame_idx += 1
 
                     if connection_id not in self._active_connections:
                         logger.warning("Connection closed during video streaming")
                         break
+
+                    # 🔑 WebSocket 전송 직전 최종 프레임 크기 검증 및 강제 리사이즈
+                    import cv2
+                    import numpy as np
+
+                    np_arr = np.frombuffer(frame_data, np.uint8)
+                    decoded_frame = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
+
+                    if decoded_frame is not None:
+                        actual_h, actual_w = decoded_frame.shape[:2]
+                        target_w, target_h = 784, 1176
+
+                        if actual_w != target_w or actual_h != target_h:
+                            if lipsync_frame_idx <= 3 or lipsync_frame_idx % 30 == 0:
+                                print(f"[LIPSYNC RESIZE] Frame #{lipsync_frame_idx}: {actual_w}x{actual_h} → {target_w}x{target_h}", flush=True)
+                                logger.warning(f"⚠️ [LipSync] 프레임 크기 불일치: {actual_w}x{actual_h} → {target_w}x{target_h}로 강제 리사이즈")
+
+                            resized_frame = cv2.resize(decoded_frame, (target_w, target_h), interpolation=cv2.INTER_CUBIC)
+                            _, encoded = cv2.imencode(".jpg", resized_frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
+                            frame_data = encoded.tobytes()
 
                     try:
                         await websocket.send_bytes(frame_data)

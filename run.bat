@@ -86,15 +86,30 @@ if not errorlevel 1 (
 
 REM Clean Python cache (to ensure latest code is used)
 echo       Python 캐시 정리 중...
-if exist "__pycache__" rmdir /s /q "__pycache__" 2>nul
-if exist "src\__pycache__" rmdir /s /q "src\__pycache__" 2>nul
-if exist "src\api\__pycache__" rmdir /s /q "src\api\__pycache__" 2>nul
-if exist "src\pipeline\__pycache__" rmdir /s /q "src\pipeline\__pycache__" 2>nul
-if exist "src\models\__pycache__" rmdir /s /q "src\models\__pycache__" 2>nul
-if exist "src\models\integrations\__pycache__" rmdir /s /q "src\models\integrations\__pycache__" 2>nul
-if exist "src\services\__pycache__" rmdir /s /q "src\services\__pycache__" 2>nul
-if exist "src\utils\__pycache__" rmdir /s /q "src\utils\__pycache__" 2>nul
-echo       ✅ Python 캐시 정리 완료
+
+REM Delete ALL __pycache__ folders recursively (most thorough method)
+for /d /r . %%d in (__pycache__) do (
+    if exist "%%d" (
+        echo       삭제: %%d
+        rmdir /s /q "%%d" 2>nul
+    )
+)
+
+REM Delete ALL .pyc files directly
+for /r . %%f in (*.pyc) do (
+    if exist "%%f" (
+        del /f /q "%%f" 2>nul
+    )
+)
+
+REM Delete .pyo files as well
+for /r . %%f in (*.pyo) do (
+    if exist "%%f" (
+        del /f /q "%%f" 2>nul
+    )
+)
+
+echo       ✅ Python 캐시 정리 완료 (모든 __pycache__ 및 .pyc/.pyo 삭제)
 
 REM ============================================================
 REM 1. Python check
