@@ -976,6 +976,7 @@ class AvatarRenderer:
         bytes_per_frame = samples_per_frame * 2  # 16-bit audio
 
         logger.info(f"🎬 Starting audio stream rendering: sample_rate={audio_sample_rate}, fps={self.target_fps}, bytes_per_frame={bytes_per_frame}")
+        print(f"[RENDER_WITH_AUDIO] 시작: output={self.output_width}x{self.output_height}", flush=True)
 
         async for audio_chunk in audio_stream:
             logger.debug(f"Received audio chunk: {len(audio_chunk)} bytes, buffer: {len(audio_buffer)} bytes")
@@ -1008,7 +1009,8 @@ class AvatarRenderer:
                     )
 
                 # 🔑 프레임 크기 로깅 (모든 프레임)
-                if frame_index == 0 or frame_index % 30 == 0:
+                if frame_index == 0:
+                    print(f"[FRAME 0] base_frame={base_frame.shape[1]}x{base_frame.shape[0]}, target={target_w}x{target_h}", flush=True)
                     logger.info(f"📐 [Frame {frame_index}] base_frame={target_w}x{target_h} (확정), output_size={self.output_width}x{self.output_height}")
 
                 # 립싱크 적용
@@ -1018,7 +1020,10 @@ class AvatarRenderer:
 
                 # 🔑 립싱크 결과 크기 로깅 (모든 프레임)
                 lh, lw = lipsync_frame.shape[:2]
-                if frame_index == 0 or frame_index % 30 == 0:
+                if frame_index == 0:
+                    print(f"[FRAME 0] lipsync 결과={lw}x{lh}, target={target_w}x{target_h}", flush=True)
+                    if lw == 512 and lh == 512:
+                        print(f"[ERROR] MuseTalk이 512x512 반환! 리사이즈 필요!", flush=True)
                     logger.info(f"📐 [Frame {frame_index}] lipsync 결과={lw}x{lh}, target={target_w}x{target_h}")
 
                 # 🔑 프레임 크기가 base_frame 크기와 다르면 리사이즈 (Settings 무시, 원본 비디오 크기 사용)
@@ -1051,11 +1056,18 @@ class AvatarRenderer:
                     ".jpg", lipsync_frame, [cv2.IMWRITE_JPEG_QUALITY, 85]
                 )
 
-                # 🔑 인코딩 후 최종 크기 재확인
-                final_h_check, final_w_check = lipsync_frame.shape[:2]
-                if final_w_check != target_w or final_h_check != target_h:
-                    logger.error(f"❌ [Frame {frame_index}] 인코딩 직전 크기 불일치! {final_w_check}x{final_h_check} (예상: {target_w}x{target_h})")
-                
+                # 🔑 인코딩 후 JPEG 실제 크기 확인
+                if frame_index == 0:
+                    # JPEG 디코딩해서 실제 크기 확인
+                    verify_decoded = cv2.imdecode(encoded, cv2.IMREAD_COLOR)
+                    if verify_decoded is not None:
+                        vh, vw = verify_decoded.shape[:2]
+                        print(f"[FRAME 0] JPEG 인코딩 후 검증: {vw}x{vh}, bytes={len(encoded)}", flush=True)
+                        if vw == 512 and vh == 512:
+                            print(f"[CRITICAL ERROR] JPEG가 여전히 512x512! lipsync_frame 크기 문제!", flush=True)
+                    else:
+                        print(f"[WARNING] JPEG 검증 디코딩 실패", flush=True)
+
                 if frame_index == 0 or frame_index % 30 == 0:
                     logger.info(f"📐 [Frame {frame_index}] JPEG 인코딩 완료: {len(encoded)} bytes, 전송 크기={final_w}x{final_h}")
 

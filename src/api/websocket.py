@@ -963,29 +963,44 @@ class AvatarWebSocketHandler:
                 
                 video_frames = []
                 first_frame_logged = False
+                print(f"[LIPSYNC START] 립싱크 프레임 생성 시작...", flush=True)
                 try:
                     async for frame in self.pipeline.renderer.render_with_audio(
                         audio_stream=audio_generator(),
                         audio_sample_rate=self.pipeline.tts.sample_rate,
                     ):
-                        video_frames.append(frame.data)
-                        # 🔑 첫 번째 프레임 크기 로깅 및 파일 저장 (512x512 문제 디버그)
+                        # 🔑 첫 번째 프레임: JPEG 실제 크기 확인
                         if not first_frame_logged:
                             first_frame_logged = True
-                            logger.info(f"📐 [WebSocket LipSync] 첫 번째 프레임: {frame.width}x{frame.height}, JPEG bytes: {len(frame.data)}")
-                            # 🔑 디버그: 첫 번째 립싱크 프레임을 파일로 저장
+                            import cv2
+                            import numpy as np
+
+                            # JPEG 디코딩하여 실제 크기 확인
+                            np_arr = np.frombuffer(frame.data, np.uint8)
+                            decoded = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
+                            if decoded is not None:
+                                actual_h, actual_w = decoded.shape[:2]
+                                print(f"[LIPSYNC FIRST FRAME] VideoFrame: {frame.width}x{frame.height}, JPEG 실제 크기: {actual_w}x{actual_h}", flush=True)
+                                logger.info(f"📐 [LipSync 첫 프레임] VideoFrame: {frame.width}x{frame.height}, JPEG 실제 크기: {actual_w}x{actual_h}")
+
+                                # 512x512 감지
+                                if actual_w == 512 and actual_h == 512:
+                                    print(f"[ERROR] ❌ 512x512 프레임 감지! MuseTalk에서 잘못된 크기 생성!", flush=True)
+                                    logger.error(f"❌ 512x512 프레임 감지! MuseTalk에서 잘못된 크기 생성!")
+                            else:
+                                print(f"[WARNING] JPEG 디코딩 실패", flush=True)
+
+                            # 디버그 파일 저장
                             try:
                                 import os
                                 debug_path = os.path.abspath("debug_first_frame_lipsync.jpg")
-                                logger.info(f"🔍 디버그 파일 저장 시도: {debug_path}")
                                 with open(debug_path, "wb") as f:
                                     f.write(frame.data)
-                                file_size = os.path.getsize(debug_path)
-                                logger.info(f"✅ 디버그: 첫 번째 립싱크 프레임 저장 성공 → {debug_path} ({file_size} bytes)")
+                                print(f"[DEBUG] 첫 프레임 저장: {debug_path}", flush=True)
                             except Exception as e:
-                                import traceback
-                                logger.error(f"❌ 디버그 파일 저장 실패: {e}")
-                                logger.error(f"❌ 에러 상세: {traceback.format_exc()}")
+                                print(f"[ERROR] 파일 저장 실패: {e}", flush=True)
+
+                        video_frames.append(frame.data)
                 except Exception as e:
                     import traceback
                     error_trace = traceback.format_exc()
