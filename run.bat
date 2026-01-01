@@ -983,6 +983,18 @@ REM 9. Server startup (Backend + Frontend)
 REM ============================================================
 echo.
 echo [9/10] 서버 시작 중...
+
+REM 🔑 Kill any existing process using port 8000 (prevent port conflict error)
+echo       기존 서버 프로세스 종료 중...
+for /f "tokens=5" %%a in ('netstat -ano 2^>nul ^| findstr ":8000.*LISTENING"') do (
+    echo       포트 8000 사용 중인 프로세스 종료: PID %%a
+    taskkill /PID %%a /F >nul 2>&1
+)
+for /f "tokens=5" %%a in ('netstat -ano 2^>nul ^| findstr ":5173.*LISTENING"') do (
+    echo       포트 5173 사용 중인 프로세스 종료: PID %%a
+    taskkill /PID %%a /F >nul 2>&1
+)
+timeout /t 1 /nobreak >nul
 echo.
 echo ============================================================
 echo   백엔드 API:  http://localhost:8000
