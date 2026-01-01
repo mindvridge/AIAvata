@@ -16,8 +16,10 @@ from uuid import UUID
 from fastapi import WebSocket, WebSocketDisconnect
 
 from ..models.schemas import ConnectionState, CONNECTION_STATE_TRANSITIONS
+from .routes import get_initialization_complete
 
 logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)  # 🔑 로거 레벨 명시적 설정 (INFO 보장)
 
 
 class ConnectionStateMachine:
@@ -155,6 +157,36 @@ class AvatarWebSocketHandler:
             websocket: WebSocket 연결
             session_id: 세션 ID (선택적)
         """
+        # 🔑 WebSocket 연결 시 로깅 설정 재확인 (uvicorn이 로깅을 덮어쓴 경우 대비)
+        import logging
+        root_logger = logging.getLogger()
+        root_logger.setLevel(logging.INFO)
+        # uvicorn 로거들 재설정
+        for uvicorn_logger_name in ['uvicorn', 'uvicorn.access', 'uvicorn.error']:
+            uvicorn_logger = logging.getLogger(uvicorn_logger_name)
+            uvicorn_logger.handlers = []
+            uvicorn_logger.setLevel(logging.INFO)
+            uvicorn_logger.propagate = True
+        # 주요 모듈 로거 재설정
+        for module_name in ['src', 'src.api', 'src.api.websocket']:
+            module_logger = logging.getLogger(module_name)
+            module_logger.setLevel(logging.INFO)
+            module_logger.propagate = True
+        
+        # 🔑 테스트: 함수 진입 확인
+        print("=" * 60, flush=True)
+        print(f"[TEST] handle_connection called! session_id={session_id}", flush=True)
+        print("=" * 60, flush=True)
+        logger.info("=" * 60)
+        logger.info(f"🔧 WebSocket 연결 시 로깅 설정 재확인 완료 - session_id={session_id}")
+        logger.info("=" * 60)
+        
+        # 🔑 초기화 완료 여부 확인 (연결 수락 전에 확인)
+        if not get_initialization_complete():
+            logger.warning(f"⚠️ WebSocket 연결 거부: 서비스가 아직 초기화 중입니다 (session_id={session_id})")
+            await websocket.close(code=1013, reason="Service initializing, please wait")
+            return
+        
         await websocket.accept()
         connection_id = id(websocket)
 
@@ -237,8 +269,11 @@ class AvatarWebSocketHandler:
                 self._active_connections[connection_id]["idle_task"] = None
 
             # 메시지 수신 루프
+            logger.info("🔄 메시지 수신 루프 시작")
+            print("[TEST] 메시지 수신 루프 시작", flush=True)  # 🔑 테스트 출력
             while True:
                 message = await websocket.receive()
+                print(f"[TEST] 메시지 수신됨: type={message.get('type')}", flush=True)  # 🔑 테스트 출력
 
                 # 활동 시간 업데이트
                 if connection_id in self._active_connections:
@@ -254,16 +289,18 @@ class AvatarWebSocketHandler:
                             logger.warning(f"Audio chunk too large: {len(audio_data)} bytes")
                             await self._send_error(websocket, "Audio chunk too large")
                             continue
-                        logger.debug(f"Received audio bytes: {len(audio_data)} bytes")
+                        logger.info(f"📥 오디오 데이터 수신: {len(audio_data)} bytes")
+                        print(f"[TEST] 오디오 데이터 수신: {len(audio_data)} bytes", flush=True)  # 🔑 테스트 출력
                         await self._handle_audio(websocket, audio_data, uuid_session)
                     elif "text" in message:
                         text_data = message["text"]
+                        logger.info(f"📥 텍스트 메시지 수신: {text_data}")
+                        print(f"[TEST] 텍스트 메시지 수신: {text_data}", flush=True)  # 🔑 테스트 출력
                         # 메시지 크기 검증
                         if len(text_data) > self.pipeline.settings.max_message_size_bytes:
                             logger.warning(f"Message too large: {len(text_data)} bytes")
                             await self._send_error(websocket, "Message too large")
                             continue
-                        logger.debug(f"Received text message: {text_data[:100]}...")
                         await self._handle_control(websocket, text_data, uuid_session)
                     else:
                         logger.warning(f"Unknown message format: {message}")
@@ -416,10 +453,15 @@ class AvatarWebSocketHandler:
 
         # 버퍼링된 오디오 처리
         try:
+            frame_count = 0
             async for frame in self.pipeline.process_audio_input(
                 audio=combined_audio,
                 session_id=session_id,
             ):
+                # 🔑 첫 프레임 크기 로깅 (512x512 문제 디버그)
+                if frame_count == 0:
+                    logger.info(f"📐 [WebSocket Buffered Audio] 첫 번째 프레임: {frame.width}x{frame.height}, JPEG bytes: {len(frame.data)}")
+                frame_count += 1
                 await websocket.send_bytes(frame.data)
         except Exception as e:
             logger.error(f"Buffered audio processing error: {e}")
@@ -481,7 +523,7 @@ class AvatarWebSocketHandler:
                     logger.warning(f"Chat text too long: {len(text)} chars")
                     await self._send_error(websocket, f"Text too long (max {self.pipeline.settings.max_text_length} chars)")
                 elif text:
-                    logger.debug(f"Chat message received: '{text[:50]}...'")
+                    logger.info(f"💬 채팅 메시지 수신 (JSON 파싱 후): {text}")
                     await self._handle_chat(websocket, text, session_id)
                 else:
                     logger.warning("Chat message text is empty")
@@ -551,6 +593,30 @@ class AvatarWebSocketHandler:
                 session_id=session_id,
                 duration=-1,  # 무한 스트림 (연결이 끊어질 때까지)
             ):
+                # 🔑 첫 프레임 크기 로깅 및 파일 저장 (512x512 문제 디버그)
+                if frame_count == 0:
+                    print(f"[FIRST FRAME] Width={frame.width}, Height={frame.height}, Bytes={len(frame.data)}", flush=True)
+                    logger.info(f"📐 [WebSocket Idle] 첫 번째 프레임: {frame.width}x{frame.height}, JPEG bytes: {len(frame.data)}")
+                    # 🔑 512x512 프레임 감지 시 즉시 경고
+                    if frame.width == 512 and frame.height == 512:
+                        print(f"[ERROR] 첫 프레임이 512x512입니다! 백엔드 프레임 생성 문제!", flush=True)
+                        logger.error(f"❌ 첫 프레임이 512x512입니다! 백엔드 프레임 생성 문제!")
+                    # 🔑 디버그: 첫 번째 프레임을 파일로 저장
+                    try:
+                        import os
+                        debug_path = os.path.abspath("debug_first_frame_idle.jpg")
+                        logger.info(f"🔍 디버그 파일 저장 시도: {debug_path}")
+                        print(f"[DEBUG] 디버그 파일 저장: {debug_path}", flush=True)
+                        with open(debug_path, "wb") as f:
+                            f.write(frame.data)
+                        file_size = os.path.getsize(debug_path)
+                        logger.info(f"✅ 디버그: 첫 번째 프레임 저장 성공 → {debug_path} ({file_size} bytes)")
+                        print(f"[DEBUG] 파일 저장 성공: {file_size} bytes", flush=True)
+                    except Exception as e:
+                        import traceback
+                        logger.error(f"❌ 디버그 파일 저장 실패: {e}")
+                        logger.error(f"❌ 에러 상세: {traceback.format_exc()}")
+                        print(f"[ERROR] 파일 저장 실패: {e}", flush=True)
                 # 연결이 끊어지면 중지
                 if connection_id not in self._active_connections:
                     logger.info(f"Connection {connection_id} closed, stopping idle stream")
@@ -563,9 +629,14 @@ class AvatarWebSocketHandler:
 
                 try:
                     frame_count += 1
-                    # 처음 몇 프레임은 INFO 레벨로 로깅 (크기 정보 포함)
+                    # 🔑 프레임 크기 강제 출력 (로그가 안 보일 수 있으므로 print도 사용)
                     if frame_count <= 3:
+                        print(f"[FRAME #{frame_count}] Width={frame.width}, Height={frame.height}, Bytes={len(frame.data)}", flush=True)
                         logger.info(f"🎬 Idle frame #{frame_count}: {frame.width}x{frame.height}, {len(frame.data)} bytes")
+                        # 🔑 512x512 프레임 감지 시 경고
+                        if frame.width == 512 and frame.height == 512:
+                            print(f"[ERROR] 512x512 프레임 감지! Frame #{frame_count}", flush=True)
+                            logger.error(f"❌ 512x512 프레임 감지! Frame #{frame_count}: {frame.width}x{frame.height}")
                     elif frame_count % 30 == 0:  # 매 30프레임마다 로그
                         logger.info(f"🎬 Sent {frame_count} idle frames to connection {connection_id}")
 
@@ -677,7 +748,7 @@ class AvatarWebSocketHandler:
 
         state_machine: ConnectionStateMachine = connection["state_machine"]
         logger.info("=" * 60)
-        logger.info(f"💬 채팅 메시지 수신: '{text[:50]}...'")
+        logger.info(f"💬 사용자 메시지: {text}")
         logger.info("=" * 60)
 
         # 🎬 idle 루프는 계속 재생 - TTS/립싱크 준비 완료까지 PROCESSING 전이 안 함
@@ -717,7 +788,7 @@ class AvatarWebSocketHandler:
                 conversation_history=conversation_history,
             )
 
-            logger.info(f"LLM response: {response_text[:50]}...")
+            logger.info(f"🤖 LLM 응답: {response_text}")
 
             # 대화 히스토리에 어시스턴트 응답 추가
             if session:
@@ -808,7 +879,7 @@ class AvatarWebSocketHandler:
             return
 
         state_machine: ConnectionStateMachine = connection["state_machine"]
-        logger.info(f"🎙️ 실시간 TTS 스트리밍 시작: '{response_text[:50]}...' (lang={language})")
+        logger.info(f"🎙️ 실시간 TTS 스트리밍 시작 (lang={language}): {response_text}")
 
         # 텍스트 응답 먼저 전송 (UI 업데이트용)
         await self._send_json(websocket, {
@@ -826,7 +897,7 @@ class AvatarWebSocketHandler:
 
         try:
             # 문장 단위 TTS 스트리밍 (오디오-비디오 동기화를 위해)
-            logger.info(f"🔄 Starting sentence TTS streaming for text: '{response_text[:100]}...'")
+            logger.info(f"🔄 문장별 TTS 스트리밍 시작: {response_text}")
             stream_started = False
             first_sentence = True
             
@@ -862,10 +933,23 @@ class AvatarWebSocketHandler:
                         audio_sample_rate=self.pipeline.tts.sample_rate,
                     ):
                         video_frames.append(frame.data)
-                        # 🔑 첫 번째 프레임 크기 로깅 (512x512 문제 디버그)
+                        # 🔑 첫 번째 프레임 크기 로깅 및 파일 저장 (512x512 문제 디버그)
                         if not first_frame_logged:
                             first_frame_logged = True
-                            logger.info(f"📐 [WebSocket] 첫 번째 립싱크 프레임: {frame.width}x{frame.height}, JPEG bytes: {len(frame.data)}")
+                            logger.info(f"📐 [WebSocket LipSync] 첫 번째 프레임: {frame.width}x{frame.height}, JPEG bytes: {len(frame.data)}")
+                            # 🔑 디버그: 첫 번째 립싱크 프레임을 파일로 저장
+                            try:
+                                import os
+                                debug_path = os.path.abspath("debug_first_frame_lipsync.jpg")
+                                logger.info(f"🔍 디버그 파일 저장 시도: {debug_path}")
+                                with open(debug_path, "wb") as f:
+                                    f.write(frame.data)
+                                file_size = os.path.getsize(debug_path)
+                                logger.info(f"✅ 디버그: 첫 번째 립싱크 프레임 저장 성공 → {debug_path} ({file_size} bytes)")
+                            except Exception as e:
+                                import traceback
+                                logger.error(f"❌ 디버그 파일 저장 실패: {e}")
+                                logger.error(f"❌ 에러 상세: {traceback.format_exc()}")
                 except Exception as e:
                     import traceback
                     error_trace = traceback.format_exc()

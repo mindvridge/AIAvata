@@ -109,10 +109,12 @@ class AvatarRenderer:
         if self._initialized:
             return
 
+        logger.info("=" * 60)
         logger.info("Initializing Avatar Renderer...")
         logger.info(f"📐 초기 출력 크기: {self.output_width}x{self.output_height}")
 
         # 🔑 Idle 루프 먼저 로드 (비디오 크기 감지를 위해)
+        logger.info("🔄 Loading idle loops (for video size detection)...")
         await self._load_idle_loops()
         logger.info(f"📐 비디오 감지 후 출력 크기: {self.output_width}x{self.output_height}")
 
@@ -279,7 +281,14 @@ class AvatarRenderer:
 
     async def _load_idle_loops(self) -> None:
         """감정별 idle 루프 영상 로드 또는 생성"""
+        logger.info("📂 _load_idle_loops() 시작")
         self.idle_loops_dir.mkdir(parents=True, exist_ok=True)
+        
+        # 🔑 기존 캐시 클리어 (이전 설정의 잘못된 크기 프레임 방지)
+        self._idle_loops.clear()
+        self._idle_video_paths.clear()
+        self._cached_videos.clear()
+        logger.info("🧹 기존 캐시 클리어 완료")
 
         # 🎬 우선순위 1: Pre-rendered idle loop 비디오 직접 로드 (최고 품질)
         # avata_ani.mp4를 기본 루프 영상으로 사용
@@ -320,10 +329,31 @@ class AvatarRenderer:
                     
                     frames = await self._load_video_frames(str(prerendered_path))
                     if frames:
-                        # 🔑 캐시된 프레임 크기 검증
+                        # 🔑 캐시된 프레임 크기 검증 및 강제 리사이즈 (무조건 output_width/output_height로)
                         first_frame = frames[0]
                         fh, fw = first_frame.shape[:2]
-                        logger.info(f"   📐 캐시된 프레임 크기: {fw}x{fh} (첫 번째 프레임)")
+                        logger.info(f"   📐 캐시된 프레임 크기: {fw}x{fh} (첫 번째 프레임), target: {self.output_width}x{self.output_height}")
+                        
+                        # 🔑 프레임 크기가 target과 다르면 무조건 리사이즈 (512x512든 아니든 상관없이)
+                        if fw != self.output_width or fh != self.output_height:
+                            if fw == 512 and fh == 512:
+                                logger.error(f"❌ 잘못된 프레임 크기 감지: {fw}x{fh} (정사각형). 자동으로 {self.output_width}x{self.output_height}로 리사이즈합니다.")
+                            else:
+                                logger.warning(f"⚠️ 프레임 크기 불일치: 프레임={fw}x{fh}, target={self.output_width}x{self.output_height}, 자동 리사이즈")
+                            
+                            # 모든 프레임을 target 크기로 강제 리사이즈
+                            resized_frames = []
+                            for i, frame in enumerate(frames):
+                                resized = cv2.resize(
+                                    frame,
+                                    (self.output_width, self.output_height),
+                                    interpolation=cv2.INTER_CUBIC
+                                )
+                                resized_frames.append(resized)
+                            frames = resized_frames
+                            logger.info(f"   ✅ {len(frames)}개 프레임 리사이즈 완료: {fw}x{fh} → {self.output_width}x{self.output_height}")
+                        else:
+                            logger.info(f"   ✅ 프레임 크기가 이미 올바릅니다: {fw}x{fh}")
 
                         self._idle_loops[Emotion.NEUTRAL] = frames
                         self._idle_loops[Emotion.HAPPY] = frames
@@ -631,12 +661,31 @@ class AvatarRenderer:
 
         # 현재 프레임 인덱스 (루프 내)
         frame_idx_in_loop = self._current_frame_idx % len(frames)
-        frame = frames[frame_idx_in_loop]
+        frame = frames[frame_idx_in_loop].copy()  # 복사본 사용
         self._current_frame_idx += 1
 
-        # 첫 프레임만 크기 로깅 (루프 시작)
-        if frame_idx_in_loop == 0:
-            h, w = frame.shape[:2]
+        # 🔑 모든 프레임에 대해 크기 검증 및 강제 리사이즈 (512x512 등 잘못된 크기 방지)
+        h, w = frame.shape[:2]
+        if w != self.output_width or h != self.output_height:
+            # 첫 프레임만 상세 로깅
+            if frame_idx_in_loop == 0:
+                if w == 512 and h == 512:
+                    logger.error(f"❌ get_idle_frame: 잘못된 프레임 크기 {w}x{h} (정사각형) 감지!")
+                    logger.error(f"   자동으로 {self.output_width}x{self.output_height}로 리사이즈합니다.")
+                else:
+                    logger.warning(f"⚠️ get_idle_frame: 프레임 크기 불일치 - 프레임={w}x{h}, output={self.output_width}x{self.output_height}")
+                    logger.warning(f"   자동으로 {self.output_width}x{self.output_height}로 리사이즈합니다.")
+            
+            frame = cv2.resize(
+                frame,
+                (self.output_width, self.output_height),
+                interpolation=cv2.INTER_CUBIC
+            )
+            
+            if frame_idx_in_loop == 0:
+                logger.info(f"📐 get_idle_frame: idle_loop 프레임 리사이즈 완료 ({w}x{h} → {self.output_width}x{self.output_height}) - 루프 시작")
+        elif frame_idx_in_loop == 0:
+            # 첫 프레임이고 크기가 올바르면 로깅만
             logger.info(f"📐 get_idle_frame: idle_loop 프레임 ({w}x{h}) - 루프 시작")
 
         # 루프 끝에 도달했고, 대기 중이면 이벤트 발생
@@ -743,18 +792,50 @@ class AvatarRenderer:
                     logger.warning("비디오 프레임을 읽을 수 없습니다")
                     break
 
-                # 🔑 원본 프레임 크기 그대로 사용 (Settings 무시, 비디오 원본 크기 유지)
+                # 🔑 output_width/output_height로 강제 리사이즈 (512x512 등 잘못된 크기 방지)
                 frame_h, frame_w = frame.shape[:2]
+                target_w = self.output_width
+                target_h = self.output_height
+                
+                if frame_w != target_w or frame_h != target_h:
+                    if frame_index == 0 or frame_index % 30 == 0:
+                        logger.warning(f"⚠️ [File Stream Frame {frame_index}] 크기 불일치: {frame_w}x{frame_h} → {target_w}x{target_h}로 강제 리사이즈")
+                    frame = cv2.resize(frame, (target_w, target_h), interpolation=cv2.INTER_CUBIC)
+                    frame_w = target_w
+                    frame_h = target_h
 
+                # 🔑 JPEG 인코딩 전 최종 프레임 크기 확인 및 강제 검증
+                final_h, final_w = frame.shape[:2]
+                if final_w != target_w or final_h != target_h:
+                    print(f"[ERROR] File Stream Frame {frame_index}: 크기 불일치! {final_w}x{final_h} → {target_w}x{target_h}로 강제 리사이즈", flush=True)
+                    logger.error(f"❌ [File Stream Frame {frame_index}] 크기 불일치 감지! {final_w}x{final_h} → {target_w}x{target_h}로 강제 리사이즈")
+                    frame = cv2.resize(frame, (target_w, target_h), interpolation=cv2.INTER_CUBIC)
+                    final_w = target_w
+                    final_h = target_h
+                    logger.info(f"✅ [File Stream Frame {frame_index}] 크기 보정 완료: {final_w}x{final_h}")
+                
+                if frame_index == 0 or frame_index % 30 == 0:
+                    logger.info(f"📐 [File Stream Frame {frame_index}] JPEG 인코딩 전: {final_w}x{final_h}, target: {target_w}x{target_h}")
+                    print(f"[FRAME {frame_index}] JPEG 인코딩 전: {final_w}x{final_h}", flush=True)
+                
                 # JPEG 인코딩
                 _, encoded = cv2.imencode(
                     ".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 85]
                 )
+                
+                # 🔑 JPEG 인코딩 후 크기 재확인
+                final_h_check, final_w_check = frame.shape[:2]
+                if final_w_check != target_w or final_h_check != target_h:
+                    print(f"[ERROR] 인코딩 직전 크기 불일치! {final_w_check}x{final_h_check} (예상: {target_w}x{target_h})", flush=True)
+                    logger.error(f"❌ [File Stream Frame {frame_index}] 인코딩 직전 크기 불일치! {final_w_check}x{final_h_check} (예상: {target_w}x{target_h})")
+                
+                if frame_index == 0 or frame_index % 30 == 0:
+                    logger.info(f"📐 [File Stream Frame {frame_index}] JPEG 인코딩 완료: {len(encoded)} bytes, 전송 크기: {final_w}x{final_h}")
 
                 yield VideoFrame(
                     data=encoded.tobytes(),
-                    width=frame_w,  # 🔑 실제 프레임 크기 사용
-                    height=frame_h,  # 🔑 실제 프레임 크기 사용
+                    width=final_w,  # 🔑 target_w/target_h 사용 (확정된 크기)
+                    height=final_h,  # 🔑 target_w/target_h 사용 (확정된 크기)
                     timestamp=time.time(),
                     frame_index=frame_index,
                     encoding="jpeg",
@@ -801,18 +882,50 @@ class AvatarRenderer:
             # 현재 idle 프레임 가져오기
             frame = self.get_idle_frame()
 
-            # 🔑 원본 프레임 크기 그대로 사용 (Settings 무시, 비디오 원본 크기 유지)
+            # 🔑 output_width/output_height로 강제 리사이즈 (512x512 등 잘못된 크기 방지)
             frame_h, frame_w = frame.shape[:2]
+            target_w = self.output_width
+            target_h = self.output_height
+            
+            if frame_w != target_w or frame_h != target_h:
+                if frame_index == 0 or frame_index % 30 == 0:
+                    logger.warning(f"⚠️ [Memory Stream Frame {frame_index}] 크기 불일치: {frame_w}x{frame_h} → {target_w}x{target_h}로 강제 리사이즈")
+                frame = cv2.resize(frame, (target_w, target_h), interpolation=cv2.INTER_CUBIC)
+                frame_w = target_w
+                frame_h = target_h
 
+            # 🔑 JPEG 인코딩 전 최종 프레임 크기 확인 및 강제 검증
+            final_h, final_w = frame.shape[:2]
+            if final_w != target_w or final_h != target_h:
+                print(f"[ERROR] Memory Stream Frame {frame_index}: 크기 불일치! {final_w}x{final_h} → {target_w}x{target_h}로 강제 리사이즈", flush=True)
+                logger.error(f"❌ [Memory Stream Frame {frame_index}] 크기 불일치 감지! {final_w}x{final_h} → {target_w}x{target_h}로 강제 리사이즈")
+                frame = cv2.resize(frame, (target_w, target_h), interpolation=cv2.INTER_CUBIC)
+                final_w = target_w
+                final_h = target_h
+                logger.info(f"✅ [Memory Stream Frame {frame_index}] 크기 보정 완료: {final_w}x{final_h}")
+            
+            if frame_index == 0 or frame_index % 30 == 0:
+                logger.info(f"📐 [Memory Stream Frame {frame_index}] JPEG 인코딩 전: {final_w}x{final_h}, target: {target_w}x{target_h}")
+                print(f"[FRAME {frame_index}] JPEG 인코딩 전: {final_w}x{final_h}", flush=True)
+            
             # JPEG 인코딩
             _, encoded = cv2.imencode(
                 ".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 85]
             )
+            
+            # 🔑 JPEG 인코딩 후 크기 재확인
+            final_h_check, final_w_check = frame.shape[:2]
+            if final_w_check != target_w or final_h_check != target_h:
+                print(f"[ERROR] 인코딩 직전 크기 불일치! {final_w_check}x{final_h_check} (예상: {target_w}x{target_h})", flush=True)
+                logger.error(f"❌ [Memory Stream Frame {frame_index}] 인코딩 직전 크기 불일치! {final_w_check}x{final_h_check} (예상: {target_w}x{target_h})")
+            
+            if frame_index == 0 or frame_index % 30 == 0:
+                logger.info(f"📐 [Memory Stream Frame {frame_index}] JPEG 인코딩 완료: {len(encoded)} bytes, 전송 크기: {final_w}x{final_h}")
 
             yield VideoFrame(
                 data=encoded.tobytes(),
-                width=frame_w,  # 🔑 실제 프레임 크기 사용
-                height=frame_h,  # 🔑 실제 프레임 크기 사용
+                width=final_w,  # 🔑 target_w/target_h 사용 (확정된 크기)
+                height=final_h,  # 🔑 target_w/target_h 사용 (확정된 크기)
                 timestamp=time.time(),
                 frame_index=frame_index,
                 encoding="jpeg",
@@ -874,16 +987,24 @@ class AvatarRenderer:
                 # 현재 idle 프레임 가져오기
                 base_frame = self.get_idle_frame()
 
-                # 🔑 원본 프레임 크기를 기준으로 사용 (Settings 값 무시)
-                # Settings 환경변수가 잘못 설정되어도 원본 비디오 크기 유지
-                target_h, target_w = base_frame.shape[:2]
+                # 🔑 output_width/output_height를 기준으로 사용 (base_frame 크기 무시)
+                # get_idle_frame()에서 자동 리사이즈가 되었지만, 혹시 모를 경우를 위해 강제 설정
+                target_w = self.output_width
+                target_h = self.output_height
+
+                # 🔑 base_frame 크기 검증 및 강제 리사이즈 (512x512 등 잘못된 크기 방지)
+                base_h, base_w = base_frame.shape[:2]
+                if base_w != target_w or base_h != target_h:
+                    logger.warning(f"⚠️ [Frame {frame_index}] base_frame 크기 불일치: {base_w}x{base_h} → {target_w}x{target_h}로 강제 리사이즈")
+                    base_frame = cv2.resize(
+                        base_frame,
+                        (target_w, target_h),
+                        interpolation=cv2.INTER_CUBIC
+                    )
 
                 # 🔑 프레임 크기 로깅 (모든 프레임)
                 if frame_index == 0 or frame_index % 30 == 0:
-                    logger.info(f"📐 [Frame {frame_index}] base_frame={target_w}x{target_h}, output_size={self.output_width}x{self.output_height}")
-                    # Settings 값과 실제 프레임 크기가 다르면 경고
-                    if target_w != self.output_width or target_h != self.output_height:
-                        logger.warning(f"⚠️ Settings output_size({self.output_width}x{self.output_height})가 비디오 크기({target_w}x{target_h})와 다름! 비디오 크기 사용")
+                    logger.info(f"📐 [Frame {frame_index}] base_frame={target_w}x{target_h} (확정), output_size={self.output_width}x{self.output_height}")
 
                 # 립싱크 적용
                 lipsync_frame = await self._apply_lipsync(
@@ -904,8 +1025,19 @@ class AvatarRenderer:
                         interpolation=cv2.INTER_CUBIC
                     )
 
-                # 🔑 최종 크기 검증
+                # 🔑 최종 크기 검증 및 강제 보정 (512x512 등 잘못된 크기 최종 방어)
                 final_h, final_w = lipsync_frame.shape[:2]
+                if final_w != target_w or final_h != target_h:
+                    logger.error(f"❌ [Frame {frame_index}] 최종 크기 불일치 감지! {final_w}x{final_h} → {target_w}x{target_h}로 강제 리사이즈")
+                    lipsync_frame = cv2.resize(
+                        lipsync_frame,
+                        (target_w, target_h),
+                        interpolation=cv2.INTER_CUBIC
+                    )
+                    final_w = target_w
+                    final_h = target_h
+                    logger.info(f"✅ [Frame {frame_index}] 최종 크기 보정 완료: {final_w}x{final_h}")
+                
                 if frame_index == 0 or frame_index % 30 == 0:
                     logger.info(f"📐 [Frame {frame_index}] JPEG 인코딩 전: {final_w}x{final_h}, JPEG bytes: 예정")
 
@@ -914,13 +1046,18 @@ class AvatarRenderer:
                     ".jpg", lipsync_frame, [cv2.IMWRITE_JPEG_QUALITY, 85]
                 )
 
+                # 🔑 인코딩 후 최종 크기 재확인
+                final_h_check, final_w_check = lipsync_frame.shape[:2]
+                if final_w_check != target_w or final_h_check != target_h:
+                    logger.error(f"❌ [Frame {frame_index}] 인코딩 직전 크기 불일치! {final_w_check}x{final_h_check} (예상: {target_w}x{target_h})")
+                
                 if frame_index == 0 or frame_index % 30 == 0:
                     logger.info(f"📐 [Frame {frame_index}] JPEG 인코딩 완료: {len(encoded)} bytes, 전송 크기={final_w}x{final_h}")
 
                 yield VideoFrame(
                     data=encoded.tobytes(),
-                    width=final_w,  # 🔑 실제 프레임 크기 사용 (Settings 무시)
-                    height=final_h,  # 🔑 실제 프레임 크기 사용 (Settings 무시)
+                    width=final_w,  # 🔑 target_w/target_h 사용 (확정된 크기)
+                    height=final_h,  # 🔑 target_w/target_h 사용 (확정된 크기)
                     timestamp=time.time(),
                     frame_index=frame_index,
                     encoding="jpeg",
@@ -1020,21 +1157,26 @@ class AvatarRenderer:
             output_h, output_w = lipsync_frame.shape[:2]
             logger.info(f"🎤 [LipSync 출력] 프레임 크기: {output_w}x{output_h} (입력: {input_w}x{input_h})")
 
-            # MuseTalk 출력 크기 검증 및 리사이즈
-            if lipsync_frame.shape == frame.shape:
-                logger.debug(f"MuseTalk lip sync successful: output shape={lipsync_frame.shape}")
-                return lipsync_frame
-            else:
-                # 크기가 다르면 원본 프레임 크기로 리사이즈
-                logger.warning(f"⚠️ MuseTalk 출력 shape 불일치: 예상={frame.shape}, 실제={lipsync_frame.shape}, 리사이즈 적용")
-                h, w = frame.shape[:2]
+            # 🔑 MuseTalk 출력 크기 검증 및 강제 리사이즈 (입력 프레임 크기와 반드시 동일하게)
+            h, w = frame.shape[:2]
+            if output_w != w or output_h != h:
+                # 크기가 다르면 원본 프레임 크기로 강제 리사이즈
+                logger.warning(f"⚠️ MuseTalk 출력 크기 불일치 감지: 입력={w}x{h}, 출력={output_w}x{output_h}, 강제 리사이즈 적용")
                 lipsync_resized = cv2.resize(
                     lipsync_frame, 
                     (w, h),
                     interpolation=cv2.INTER_CUBIC
                 )
-                logger.debug(f"✅ MuseTalk 출력 리사이즈 완료: {lipsync_frame.shape} → {lipsync_resized.shape}")
+                # 리사이즈 후 최종 크기 검증
+                final_h, final_w = lipsync_resized.shape[:2]
+                if final_w != w or final_h != h:
+                    logger.error(f"❌ 리사이즈 실패: 예상={w}x{h}, 실제={final_w}x{final_h}, 원본 프레임 반환")
+                    return frame.copy()
+                logger.info(f"✅ MuseTalk 출력 리사이즈 완료: {output_w}x{output_h} → {final_w}x{final_h}")
                 return lipsync_resized
+            else:
+                logger.debug(f"MuseTalk lip sync successful: output shape={lipsync_frame.shape} (입력과 동일)")
+                return lipsync_frame
 
         except Exception as e:
             logger.error(f"❌ MuseTalk 립싱크 실패: {e}", exc_info=True)

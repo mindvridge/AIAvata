@@ -63,9 +63,11 @@ def convert_unet_to_tensorrt(
     try:
         import torch_tensorrt
         logger.info("torch-tensorrt found, attempting conversion...")
-    except ImportError:
-        logger.warning("torch-tensorrt not installed. Install with: pip install torch-tensorrt")
-        logger.warning("Falling back to PyTorch inference")
+    except (ImportError, OSError) as e:
+        # ImportError: 패키지가 설치되지 않음
+        # OSError: Windows에서 DLL 로드 실패 (torch-tensorrt의 알려진 문제)
+        logger.warning(f"torch-tensorrt not available: {e}")
+        logger.info("Falling back to PyTorch inference (this is normal on Windows)")
         return None
     
     engine_dir.mkdir(parents=True, exist_ok=True)

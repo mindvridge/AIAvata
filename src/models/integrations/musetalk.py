@@ -226,7 +226,9 @@ class MuseTalkModel:
                                     else:
                                         logger.warning("⚠️ TensorRT conversion failed, falling back to PyTorch inference")
                                 else:
-                                    logger.warning("⚠️ TensorRT not available, using PyTorch inference")
+                                    # TensorRT가 사용 불가능하지만 use_tensorrt=True로 설정된 경우에만 경고
+                                    # 기본값은 False이므로 경고 대신 INFO로 변경
+                                    logger.info("ℹ️ TensorRT not available, using PyTorch inference (normal if TensorRT is not installed)")
                             except Exception as e:
                                 logger.warning(f"⚠️ TensorRT conversion failed: {e}")
                                 logger.warning("Falling back to PyTorch inference")

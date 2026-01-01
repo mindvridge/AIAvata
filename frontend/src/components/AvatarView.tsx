@@ -247,6 +247,19 @@ export function AvatarView({
       const imgWidth = img.naturalWidth;
       const imgHeight = img.naturalHeight;
       
+      // 🔑 img 객체 정보 콘솔 출력 (디버깅용)
+      console.log('🖼️ Image 객체 정보:', {
+        img: img,
+        naturalWidth: img.naturalWidth,
+        naturalHeight: img.naturalHeight,
+        width: img.width,
+        height: img.height,
+        src: img.src,
+        complete: img.complete,
+        blobUrl: url,
+        frameNumber: frameCountRef.current
+      });
+      
       // 이미지 크기가 유효한지 확인 (서버에서 전송된 실제 크기 사용)
       if (imgWidth > 0 && imgHeight > 0) {
         // Canvas 크기가 이미지 크기와 다르면 조정

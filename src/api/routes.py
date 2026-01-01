@@ -32,6 +32,7 @@ router = APIRouter()
 _pipeline = None
 _livekit = None
 _start_time = time.time()
+_initialization_complete = False  # 초기화 완료 플래그
 
 
 def set_services(pipeline, livekit):
@@ -39,6 +40,15 @@ def set_services(pipeline, livekit):
     global _pipeline, _livekit
     _pipeline = pipeline
     _livekit = livekit
+
+def set_initialization_complete(complete: bool = True):
+    """초기화 완료 플래그 설정 (main.py에서 호출)"""
+    global _initialization_complete
+    _initialization_complete = complete
+
+def get_initialization_complete() -> bool:
+    """초기화 완료 여부 확인"""
+    return _initialization_complete
 
 
 def get_pipeline():
@@ -63,6 +73,11 @@ async def health_check(settings: Settings = Depends(get_settings)):
     Returns:
         HealthResponse: 서버 상태 정보
     """
+    # 🔑 초기화 완료 여부 확인
+    from ..main import _initialization_complete
+    if not _initialization_complete:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=503, detail="Service is still initializing")
     # GPU 가용성 확인 (CUDA 또는 MPS)
     gpu_available = False
     try:

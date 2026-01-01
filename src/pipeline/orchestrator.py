@@ -110,19 +110,23 @@ class PipelineOrchestrator:
             return
 
         logger.info("Initializing Pipeline Orchestrator...")
+        logger.info("=" * 60)
 
         # 모든 모듈 병렬 초기화
+        logger.info("🔧 Starting parallel initialization of all modules...")
         await asyncio.gather(
             self.stt.initialize(),
             self.llm.initialize(),
             self.tts.initialize(),
             self.renderer.initialize(),
         )
+        logger.info("✅ All modules initialized successfully")
 
         self._initialized = True
 
         # 세션 TTL 클린업 백그라운드 태스크 시작
         self._cleanup_task = asyncio.create_task(self._session_cleanup_loop())
+        logger.info("=" * 60)
         logger.info("Pipeline Orchestrator initialized successfully")
 
     async def _session_cleanup_loop(self) -> None:
