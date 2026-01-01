@@ -4,6 +4,11 @@ WebSocket Handler for realtime avatar communication.
 실시간 아바타 통신을 위한 WebSocket 핸들러
 """
 
+# 🔑 모듈 로드 확인 (이 메시지가 나오면 최신 코드가 로드된 것)
+print("=" * 60, flush=True)
+print("[WEBSOCKET MODULE] 최신 코드 로드됨 - 2026-01-01-v3", flush=True)
+print("=" * 60, flush=True)
+
 import asyncio
 import json
 import logging

@@ -9,6 +9,11 @@ MuseTalk 1.5 + Idle 루프 기반 아바타 렌더링 모듈
 - MIT 라이선스 (상업적 사용 가능)
 """
 
+# 🔑 모듈 로드 확인 (이 메시지가 나오면 최신 코드가 로드된 것)
+print("=" * 60, flush=True)
+print("[AVATAR_RENDERER MODULE] 최신 코드 로드됨 - 2026-01-01-v3", flush=True)
+print("=" * 60, flush=True)
+
 import asyncio
 import logging
 import time
