@@ -65,6 +65,38 @@ python -m pip install --upgrade pip -q 2>nul
 echo       환경 정리 완료
 
 REM ============================================================
+REM 0.5 Git pull and Python cache cleanup
+REM ============================================================
+echo.
+echo [0.5/10] 최신 코드 업데이트 및 캐시 정리 중...
+
+REM Pull latest code from git (if git is available)
+git --version >nul 2>&1
+if not errorlevel 1 (
+    echo       Git에서 최신 코드 가져오는 중...
+    git pull 2>nul
+    if not errorlevel 1 (
+        echo       ✅ 최신 코드 업데이트 완료
+    ) else (
+        echo       ⚠️ Git pull 실패 (로컬 변경사항이 있거나 네트워크 문제)
+    )
+) else (
+    echo       ⚠️ Git이 설치되지 않아 자동 업데이트 건너뜀
+)
+
+REM Clean Python cache (to ensure latest code is used)
+echo       Python 캐시 정리 중...
+if exist "__pycache__" rmdir /s /q "__pycache__" 2>nul
+if exist "src\__pycache__" rmdir /s /q "src\__pycache__" 2>nul
+if exist "src\api\__pycache__" rmdir /s /q "src\api\__pycache__" 2>nul
+if exist "src\pipeline\__pycache__" rmdir /s /q "src\pipeline\__pycache__" 2>nul
+if exist "src\models\__pycache__" rmdir /s /q "src\models\__pycache__" 2>nul
+if exist "src\models\integrations\__pycache__" rmdir /s /q "src\models\integrations\__pycache__" 2>nul
+if exist "src\services\__pycache__" rmdir /s /q "src\services\__pycache__" 2>nul
+if exist "src\utils\__pycache__" rmdir /s /q "src\utils\__pycache__" 2>nul
+echo       ✅ Python 캐시 정리 완료
+
+REM ============================================================
 REM 1. Python check
 REM ============================================================
 echo [1/10] Python 확인 중...
