@@ -717,8 +717,8 @@ class MuseTalkModel:
                 
                 # 🔑 차이가 작으면 입 영역만 부드럽게 증폭
                 if avg_diff_mouth < 20.0:
-                    # 증폭 계수 조정 (1.2~1.5배) - 입술 아티팩트 방지를 위해 감소
-                    amplify_factor = max(1.2, min(1.5, 25.0 / max(avg_diff_mouth, 1.0)))
+                    # 증폭 계수 조정 (1.5~1.8배) - 입 벌림 더 확실하게
+                    amplify_factor = max(1.5, min(1.8, 30.0 / max(avg_diff_mouth, 1.0)))
                     
                     # 입 영역만 선택적 증폭 (마스크 생성)
                     mouth_mask = np.zeros((256, 256), dtype=np.float32)
@@ -1262,8 +1262,8 @@ class MuseTalkModel:
                 from mediapipe.tasks.python import vision
                 from mediapipe.tasks.python.core import base_options
                 
-                # 모델 파일 다운로드 (없으면)
-                model_path = Path("models/face_detection_short_range.tflite")
+                # 모델 파일 다운로드 (없으면) - 절대 경로 사용
+                model_path = Path("models/face_detection_short_range.tflite").resolve()
                 model_path.parent.mkdir(parents=True, exist_ok=True)
                 
                 if not model_path.exists():
