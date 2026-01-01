@@ -72,17 +72,21 @@ echo [0.5/10] 최신 코드 업데이트 및 캐시 정리 중...
 
 REM Pull latest code from git (if git is available)
 git --version >nul 2>&1
-if not errorlevel 1 (
-    echo       Git에서 최신 코드 가져오는 중...
-    git pull 2>nul
-    if not errorlevel 1 (
-        echo       ✅ 최신 코드 업데이트 완료
-    ) else (
-        echo       ⚠️ Git pull 실패 (로컬 변경사항이 있거나 네트워크 문제)
-    )
+if errorlevel 1 goto :no_git
+
+echo       Git에서 최신 코드 가져오는 중...
+git pull
+if errorlevel 1 (
+    echo       ⚠️ Git pull 실패 (로컬 변경사항이 있거나 네트워크 문제)
 ) else (
-    echo       ⚠️ Git이 설치되지 않아 자동 업데이트 건너뜀
+    echo       ✅ 최신 코드 업데이트 완료
 )
+goto :git_done
+
+:no_git
+echo       ⚠️ Git이 설치되지 않아 자동 업데이트 건너뜀
+
+:git_done
 
 REM Clean Python cache (to ensure latest code is used)
 echo       Python 캐시 정리 중...
