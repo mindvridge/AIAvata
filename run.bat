@@ -991,38 +991,45 @@ REM Method 1: Kill by window title first (most reliable)
 taskkill /F /FI "WINDOWTITLE eq Backend - AI Avatar" >nul 2>&1
 taskkill /F /FI "WINDOWTITLE eq Frontend - AI Avatar" >nul 2>&1
 
-REM Method 2: Kill by port (netstat) - try multiple times
+REM Method 2: Kill by port with retry limit
+set KILL_RETRY=0
 :kill_port_loop
-set PORT_IN_USE=0
+set /a KILL_RETRY+=1
+if %KILL_RETRY% GTR 5 (
+    echo       ⚠️ 5회 재시도 후에도 포트 종료 실패. 수동 종료 필요.
+    echo       다음 명령어로 수동 종료: taskkill /F /PID [PID번호]
+    echo       또는 작업관리자에서 python.exe 종료
+    pause
+    goto kill_port_done
+)
+
 for /f "tokens=5" %%a in ('netstat -ano 2^>nul ^| findstr ":8000 "') do (
     if not "%%a"=="0" (
-        set PORT_IN_USE=1
-        echo       포트 8000 사용 중인 프로세스 종료: PID %%a
-        taskkill /PID %%a /F >nul 2>&1
+        echo       포트 8000 사용 중인 프로세스 강제 종료: PID %%a
+        taskkill /F /PID %%a 2>&1
+        REM Also try via wmic for stubborn processes
+        wmic process where ProcessId=%%a delete >nul 2>&1
     )
 )
 for /f "tokens=5" %%a in ('netstat -ano 2^>nul ^| findstr ":5173 "') do (
     if not "%%a"=="0" (
-        echo       포트 5173 사용 중인 프로세스 종료: PID %%a
-        taskkill /PID %%a /F >nul 2>&1
+        echo       포트 5173 사용 중인 프로세스 강제 종료: PID %%a
+        taskkill /F /PID %%a 2>&1
     )
 )
 
-REM Method 3: Kill all Python uvicorn processes
-taskkill /F /IM python.exe /FI "WINDOWTITLE eq Backend*" >nul 2>&1
-
 REM Wait for ports to be released
-timeout /t 2 /nobreak >nul
+timeout /t 3 /nobreak >nul
 
 REM Verify port 8000 is free
 netstat -ano 2>nul | findstr ":8000 " >nul 2>&1
 if not errorlevel 1 (
-    echo       ⚠️ 포트 8000 여전히 사용 중, 재시도...
-    timeout /t 2 /nobreak >nul
+    echo       ⚠️ 포트 8000 여전히 사용 중, 재시도 %KILL_RETRY%/5...
     goto kill_port_loop
 )
 
-echo       ✅ 기존 프로세스 정리 완료 (포트 사용 가능)
+:kill_port_done
+echo       ✅ 포트 정리 완료
 echo.
 echo ============================================================
 echo   백엔드 API:  http://localhost:8000
