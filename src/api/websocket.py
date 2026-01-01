@@ -1053,6 +1053,10 @@ class AvatarWebSocketHandler:
 
                 # 비디오 프레임을 FPS에 맞춰 전송 (오디오와 동기화)
                 lipsync_frame_idx = 0
+                import cv2
+                import numpy as np
+                import sys
+
                 for frame_data in video_frames:
                     frame_start = time.time()
                     lipsync_frame_idx += 1
@@ -1062,24 +1066,41 @@ class AvatarWebSocketHandler:
                         break
 
                     # 🔑 WebSocket 전송 직전 최종 프레임 크기 검증 및 강제 리사이즈
-                    import cv2
-                    import numpy as np
+                    try:
+                        np_arr = np.frombuffer(frame_data, np.uint8)
+                        decoded_frame = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
 
-                    np_arr = np.frombuffer(frame_data, np.uint8)
-                    decoded_frame = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
+                        if decoded_frame is not None:
+                            actual_h, actual_w = decoded_frame.shape[:2]
+                            target_w, target_h = 784, 1176
 
-                    if decoded_frame is not None:
-                        actual_h, actual_w = decoded_frame.shape[:2]
-                        target_w, target_h = 784, 1176
+                            # 🔑 무조건 로그 출력 (첫 3프레임)
+                            if lipsync_frame_idx <= 3:
+                                msg = f"[LIPSYNC #{lipsync_frame_idx}] 실제크기={actual_w}x{actual_h}, 목표={target_w}x{target_h}"
+                                print(msg, flush=True)
+                                sys.stdout.flush()
+                                sys.stderr.write(msg + "\n")
+                                sys.stderr.flush()
 
-                        if actual_w != target_w or actual_h != target_h:
-                            if lipsync_frame_idx <= 3 or lipsync_frame_idx % 30 == 0:
-                                print(f"[LIPSYNC RESIZE] Frame #{lipsync_frame_idx}: {actual_w}x{actual_h} → {target_w}x{target_h}", flush=True)
-                                logger.warning(f"⚠️ [LipSync] 프레임 크기 불일치: {actual_w}x{actual_h} → {target_w}x{target_h}로 강제 리사이즈")
+                            if actual_w != target_w or actual_h != target_h:
+                                # 🔑 리사이즈 실행
+                                resized_frame = cv2.resize(decoded_frame, (target_w, target_h), interpolation=cv2.INTER_CUBIC)
+                                _, encoded = cv2.imencode(".jpg", resized_frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
+                                frame_data = encoded.tobytes()
 
-                            resized_frame = cv2.resize(decoded_frame, (target_w, target_h), interpolation=cv2.INTER_CUBIC)
-                            _, encoded = cv2.imencode(".jpg", resized_frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
-                            frame_data = encoded.tobytes()
+                                if lipsync_frame_idx <= 3:
+                                    # 리사이즈 후 확인
+                                    verify = cv2.imdecode(np.frombuffer(frame_data, np.uint8), cv2.IMREAD_COLOR)
+                                    if verify is not None:
+                                        vh, vw = verify.shape[:2]
+                                        msg2 = f"[LIPSYNC #{lipsync_frame_idx}] 리사이즈 후={vw}x{vh}"
+                                        print(msg2, flush=True)
+                                        sys.stderr.write(msg2 + "\n")
+                                        sys.stderr.flush()
+                    except Exception as resize_err:
+                        print(f"[LIPSYNC ERROR] 리사이즈 오류: {resize_err}", flush=True)
+                        sys.stderr.write(f"[LIPSYNC ERROR] {resize_err}\n")
+                        sys.stderr.flush()
 
                     try:
                         await websocket.send_bytes(frame_data)
