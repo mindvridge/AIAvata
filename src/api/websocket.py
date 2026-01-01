@@ -1056,13 +1056,28 @@ class AvatarWebSocketHandler:
                 import cv2
                 import numpy as np
                 import sys
+                import os
+
+                # 🔑 디버그 로그 파일
+                debug_log_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "lipsync_debug.log")
+
+                def write_debug(msg):
+                    """파일에 디버그 메시지 기록"""
+                    try:
+                        with open(debug_log_path, "a", encoding="utf-8") as f:
+                            f.write(f"[{time.strftime('%H:%M:%S')}] {msg}\n")
+                            f.flush()
+                    except:
+                        pass
+
+                write_debug(f"===== 립싱크 시작: {len(video_frames)} 프레임 =====")
 
                 for frame_data in video_frames:
                     frame_start = time.time()
                     lipsync_frame_idx += 1
 
                     if connection_id not in self._active_connections:
-                        logger.warning("Connection closed during video streaming")
+                        write_debug("Connection closed")
                         break
 
                     # 🔑 WebSocket 전송 직전 최종 프레임 크기 검증 및 강제 리사이즈
@@ -1074,33 +1089,21 @@ class AvatarWebSocketHandler:
                             actual_h, actual_w = decoded_frame.shape[:2]
                             target_w, target_h = 784, 1176
 
-                            # 🔑 무조건 로그 출력 (첫 3프레임)
+                            # 🔑 첫 3프레임 로그
                             if lipsync_frame_idx <= 3:
-                                msg = f"[LIPSYNC #{lipsync_frame_idx}] 실제크기={actual_w}x{actual_h}, 목표={target_w}x{target_h}"
-                                print(msg, flush=True)
-                                sys.stdout.flush()
-                                sys.stderr.write(msg + "\n")
-                                sys.stderr.flush()
+                                write_debug(f"Frame #{lipsync_frame_idx}: 원본={actual_w}x{actual_h}, 목표={target_w}x{target_h}")
 
+                            # 🔑 크기가 다르면 무조건 리사이즈
                             if actual_w != target_w or actual_h != target_h:
-                                # 🔑 리사이즈 실행
+                                write_debug(f"Frame #{lipsync_frame_idx}: 리사이즈 실행 {actual_w}x{actual_h} → {target_w}x{target_h}")
                                 resized_frame = cv2.resize(decoded_frame, (target_w, target_h), interpolation=cv2.INTER_CUBIC)
                                 _, encoded = cv2.imencode(".jpg", resized_frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
                                 frame_data = encoded.tobytes()
-
-                                if lipsync_frame_idx <= 3:
-                                    # 리사이즈 후 확인
-                                    verify = cv2.imdecode(np.frombuffer(frame_data, np.uint8), cv2.IMREAD_COLOR)
-                                    if verify is not None:
-                                        vh, vw = verify.shape[:2]
-                                        msg2 = f"[LIPSYNC #{lipsync_frame_idx}] 리사이즈 후={vw}x{vh}"
-                                        print(msg2, flush=True)
-                                        sys.stderr.write(msg2 + "\n")
-                                        sys.stderr.flush()
+                                write_debug(f"Frame #{lipsync_frame_idx}: 리사이즈 완료, 새 크기={len(frame_data)} bytes")
+                        else:
+                            write_debug(f"Frame #{lipsync_frame_idx}: 디코딩 실패!")
                     except Exception as resize_err:
-                        print(f"[LIPSYNC ERROR] 리사이즈 오류: {resize_err}", flush=True)
-                        sys.stderr.write(f"[LIPSYNC ERROR] {resize_err}\n")
-                        sys.stderr.flush()
+                        write_debug(f"Frame #{lipsync_frame_idx}: 오류 - {resize_err}")
 
                     try:
                         await websocket.send_bytes(frame_data)
