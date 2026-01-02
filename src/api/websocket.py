@@ -1133,8 +1133,8 @@ class AvatarWebSocketHandler:
             logger.info(f"✅ 실시간 TTS 스트리밍 완료: 총 {total_frames_sent} 프레임 전송")
 
             # 🔑 립싱크 버퍼 초기화 (입이 열린 상태로 남는 문제 방지)
-            if hasattr(self.pipeline, 'avatar_renderer') and self.pipeline.avatar_renderer:
-                self.pipeline.avatar_renderer._reset_lipsync_buffer()
+            if hasattr(self.pipeline, 'renderer') and self.pipeline.renderer:
+                self.pipeline.renderer._reset_lipsync_buffer()
                 logger.debug("립싱크 버퍼 초기화 완료")
 
             # 스트리밍 완료 알림
@@ -1150,11 +1150,12 @@ class AvatarWebSocketHandler:
 
                 # 🔑 립싱크 완료 후 아이들 프레임 전송 (입 열린 상태 방지)
                 try:
-                    idle_frame = self.pipeline.avatar_renderer.get_idle_frame()
-                    if idle_frame is not None:
-                        _, jpeg_data = cv2.imencode(".jpg", idle_frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
-                        await websocket.send_bytes(jpeg_data.tobytes())
-                        logger.debug("립싱크 완료 후 아이들 프레임 전송")
+                    if hasattr(self.pipeline, 'renderer') and self.pipeline.renderer:
+                        idle_frame = self.pipeline.renderer.get_idle_frame()
+                        if idle_frame is not None:
+                            _, jpeg_data = cv2.imencode(".jpg", idle_frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
+                            await websocket.send_bytes(jpeg_data.tobytes())
+                            logger.debug("립싱크 완료 후 아이들 프레임 전송")
                 except Exception as e:
                     logger.warning(f"아이들 프레임 전송 실패: {e}")
 

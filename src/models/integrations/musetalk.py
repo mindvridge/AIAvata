@@ -1264,18 +1264,22 @@ class MuseTalkModel:
             try:
                 from mediapipe.tasks.python import vision
                 from mediapipe.tasks.python.core import base_options
-                
-                # 모델 파일 다운로드 (없으면) - 절대 경로 사용
-                model_path = Path("models/face_detection_short_range.tflite").resolve()
+
+                # 모델 파일 경로 - 프로젝트 루트 기준 절대 경로
+                import os
+                project_root = Path(__file__).parent.parent.parent.parent  # src/models/integrations -> project root
+                model_path = project_root / "models" / "face_detection_short_range.tflite"
                 model_path.parent.mkdir(parents=True, exist_ok=True)
-                
+
                 if not model_path.exists():
                     logger.info("📥 Face detection 모델 다운로드 중...")
                     url = "https://storage.googleapis.com/mediapipe-models/face_detector/blaze_face_short_range/float16/1/blaze_face_short_range.tflite"
                     urllib.request.urlretrieve(url, str(model_path))
                     logger.info(f"✅ 모델 다운로드 완료: {model_path}")
-                
-                base_opts = base_options.BaseOptions(model_asset_path=str(model_path))
+
+                # 🔑 절대 경로 문자열로 변환 (mediapipe 경로 문제 방지)
+                model_path_str = str(model_path.absolute())
+                base_opts = base_options.BaseOptions(model_asset_path=model_path_str)
                 options = vision.FaceDetectorOptions(
                     base_options=base_opts,
                     min_detection_confidence=0.3  # 낮은 신뢰도로 설정
