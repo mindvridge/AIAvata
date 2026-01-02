@@ -713,8 +713,8 @@ class MuseTalkModel:
                 diff = result_256.astype(np.float32) - source_256.astype(np.float32)
 
                 # 🔑 입 영역 좌표 수정 (256x256 기준)
-                # MuseTalk 표준: 입은 이미지 하단 60-82% 위치
-                mouth_y1, mouth_y2 = 155, 210  # Y: 155-210 (중심 182.5)
+                # 입 중앙으로 조정 (155-210 → 145-195)
+                mouth_y1, mouth_y2 = 145, 195  # Y: 145-195 (중심 170)
                 mouth_x1, mouth_x2 = 70, 186   # X: 70-186 (중심 128)
 
                 mouth_region_diff = np.abs(diff[mouth_y1:mouth_y2, mouth_x1:mouth_x2])  # 입 영역만

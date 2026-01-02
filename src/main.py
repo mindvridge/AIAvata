@@ -5,7 +5,7 @@ Main FastAPI Application for Realtime AI Avatar Service.
 """
 
 # 🔑 CODE VERSION MARKER - 이 버전이 출력되면 최신 코드가 실행 중인 것입니다
-CODE_VERSION = "2026-01-02-v13-MOUTH-Y-FIX"
+CODE_VERSION = "2026-01-02-v14-MOUTH-CENTER"
 
 import asyncio
 import logging
