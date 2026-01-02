@@ -1132,6 +1132,11 @@ class AvatarWebSocketHandler:
             
             logger.info(f"✅ 실시간 TTS 스트리밍 완료: 총 {total_frames_sent} 프레임 전송")
 
+            # 🔑 립싱크 버퍼 초기화 (입이 열린 상태로 남는 문제 방지)
+            if hasattr(self.pipeline, 'avatar_renderer') and self.pipeline.avatar_renderer:
+                self.pipeline.avatar_renderer._reset_lipsync_buffer()
+                logger.debug("립싱크 버퍼 초기화 완료")
+
             # 스트리밍 완료 알림
             await self._send_json(websocket, {
                 "type": "streaming_complete",

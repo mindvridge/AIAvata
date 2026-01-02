@@ -713,9 +713,9 @@ class MuseTalkModel:
                 diff = result_256.astype(np.float32) - source_256.astype(np.float32)
 
                 # 🔑 입 영역 좌표 수정 (256x256 기준)
-                # 위치를 위쪽으로 조정 (168-225 → 150-210)
-                mouth_y1, mouth_y2 = 150, 210  # Y: 150-210 (중심 180)
-                mouth_x1, mouth_x2 = 70, 186   # X: 70-186 (중심 128, 더 넓게)
+                # 위치를 더 위쪽으로 조정 (150-210 → 135-195)
+                mouth_y1, mouth_y2 = 135, 195  # Y: 135-195 (중심 165, 15px 위로)
+                mouth_x1, mouth_x2 = 70, 186   # X: 70-186 (중심 128)
 
                 mouth_region_diff = np.abs(diff[mouth_y1:mouth_y2, mouth_x1:mouth_x2])  # 입 영역만
                 avg_diff_mouth = np.mean(mouth_region_diff)
