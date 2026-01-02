@@ -723,8 +723,8 @@ class MuseTalkModel:
 
                 # 🔑 차이가 작으면 입 영역만 부드럽게 증폭
                 if avg_diff_mouth < 25.0:
-                    # 증폭 계수 증가 (1.8~2.5배) - 입 벌림 더 확실하게
-                    amplify_factor = max(1.8, min(2.5, 40.0 / max(avg_diff_mouth, 1.0)))
+                    # 증폭 계수 감소 (1.5~2.0배) - 아티팩트 방지
+                    amplify_factor = max(1.5, min(2.0, 35.0 / max(avg_diff_mouth, 1.0)))
 
                     # 입 영역만 선택적 증폭 (마스크 생성)
                     mouth_mask = np.zeros((256, 256), dtype=np.float32)
@@ -817,11 +817,11 @@ class MuseTalkModel:
                                     (0, top_boundary)
                                 )
 
-                                # 🔑 블러 강도 증가 (경계선 더 부드럽게, 0.03 → 0.06)
+                                # 🔑 블러 강도 증가 (경계선 더 부드럽게, 0.06 → 0.08)
                                 # 입술 경계 아티팩트 방지를 위해 블러 증가
-                                blur_kernel_size = int(0.06 * ori_shape[0] // 2 * 2) + 1
-                                if blur_kernel_size < 5:
-                                    blur_kernel_size = 5
+                                blur_kernel_size = int(0.08 * ori_shape[0] // 2 * 2) + 1
+                                if blur_kernel_size < 7:
+                                    blur_kernel_size = 7
                                 mask_array = cv2.GaussianBlur(
                                     np.array(modified_mask),
                                     (blur_kernel_size, blur_kernel_size), 0
@@ -917,10 +917,10 @@ class MuseTalkModel:
                                     intensity = int(200 * (1.0 - dist * 0.5))  # 최대 200
                                     mask_array[y, x] = max(mask_array[y, x], intensity)
                         
-                        # 🔑 블러 강도 증가 (경계선 더 부드럽게, 0.03 → 0.06)
-                        blur_kernel_size = int(0.06 * ori_shape[0] // 2 * 2) + 1
-                        if blur_kernel_size < 5:
-                            blur_kernel_size = 5
+                        # 🔑 블러 강도 증가 (경계선 더 부드럽게, 0.06 → 0.08)
+                        blur_kernel_size = int(0.08 * ori_shape[0] // 2 * 2) + 1
+                        if blur_kernel_size < 7:
+                            blur_kernel_size = 7
                         mask_array = cv2.GaussianBlur(mask_array, (blur_kernel_size, blur_kernel_size), 0)
 
                         # 🔑 마스크 최대값 255 (완전 불투명)
@@ -952,12 +952,11 @@ class MuseTalkModel:
                         logger.warning(f"⚠️ pad_info 없음 - 강제 리사이즈: {result_256.shape} → ({x2-x1}x{y2-y1})")
                         result_face = cv2.resize(result_256, (x2 - x1, y2 - y1), interpolation=cv2.INTER_CUBIC)
 
-                    # 🔑 Unsharp Mask 샤프닝 적용 (VAE 출력 선명화)
-                    # 실시간 처리를 위해 경량 필터 사용
-                    # 강도 감소: 1.5 → 1.15 (입술 아티팩트 방지)
-                    gaussian = cv2.GaussianBlur(result_face, (0, 0), 2.0)
-                    result_face = cv2.addWeighted(result_face, 1.15, gaussian, -0.15, 0)
-                    result_face = np.clip(result_face, 0, 255).astype(np.uint8)
+                    # 🔑 Unsharp Mask 비활성화 (아티팩트 방지)
+                    # 샤프닝이 입 주변 노이즈를 증폭시켜 아티팩트 유발
+                    # gaussian = cv2.GaussianBlur(result_face, (0, 0), 2.0)
+                    # result_face = cv2.addWeighted(result_face, 1.0, gaussian, 0.0, 0)
+                    # result_face = np.clip(result_face, 0, 255).astype(np.uint8)
 
                     # 🔑 크기 검증 및 강제 맞춤 (찌그러짐 방지)
                     expected_w, expected_h = x2 - x1, y2 - y1
