@@ -817,11 +817,11 @@ class MuseTalkModel:
                                     (0, top_boundary)
                                 )
 
-                                # 🔑 블러 강도 대폭 증가 (경계선 부드럽게, 0.08 → 0.15)
-                                # 흰색 라인 아티팩트 방지를 위해 블러 대폭 증가
-                                blur_kernel_size = int(0.15 * ori_shape[0] // 2 * 2) + 1
-                                if blur_kernel_size < 15:
-                                    blur_kernel_size = 15
+                                # 🔑 블러 강도 적절히 조정 (0.15 → 0.10)
+                                # 색상 매칭이 추가되어 블러는 적절히만
+                                blur_kernel_size = int(0.10 * ori_shape[0] // 2 * 2) + 1
+                                if blur_kernel_size < 9:
+                                    blur_kernel_size = 9
                                 mask_array = cv2.GaussianBlur(
                                     np.array(modified_mask),
                                     (blur_kernel_size, blur_kernel_size), 0
@@ -917,10 +917,10 @@ class MuseTalkModel:
                                     intensity = int(200 * (1.0 - dist * 0.5))  # 최대 200
                                     mask_array[y, x] = max(mask_array[y, x], intensity)
                         
-                        # 🔑 블러 강도 대폭 증가 (경계선 부드럽게, 0.08 → 0.15)
-                        blur_kernel_size = int(0.15 * ori_shape[0] // 2 * 2) + 1
-                        if blur_kernel_size < 15:
-                            blur_kernel_size = 15
+                        # 🔑 블러 강도 적절히 조정 (0.15 → 0.10)
+                        blur_kernel_size = int(0.10 * ori_shape[0] // 2 * 2) + 1
+                        if blur_kernel_size < 9:
+                            blur_kernel_size = 9
                         mask_array = cv2.GaussianBlur(mask_array, (blur_kernel_size, blur_kernel_size), 0)
 
                         # 🔑 마스크 최대값 255 (완전 불투명)
@@ -957,6 +957,20 @@ class MuseTalkModel:
                     # gaussian = cv2.GaussianBlur(result_face, (0, 0), 2.0)
                     # result_face = cv2.addWeighted(result_face, 1.0, gaussian, 0.0, 0)
                     # result_face = np.clip(result_face, 0, 255).astype(np.uint8)
+
+                    # 🔑 색상 매칭 - VAE 출력 색상을 원본에 맞춤 (흰색 라인 방지)
+                    # 원본 얼굴 영역 추출
+                    original_face_region = source_frame[y1:y2, x1:x2]
+                    if original_face_region.shape[:2] == result_face.shape[:2]:
+                        # 각 채널별 평균 밝기 계산
+                        for c in range(3):
+                            orig_mean = np.mean(original_face_region[:, :, c])
+                            result_mean = np.mean(result_face[:, :, c])
+                            if result_mean > 0:
+                                # 밝기 차이 보정 (80% 적용으로 자연스럽게)
+                                scale = 1.0 + (orig_mean - result_mean) / (result_mean + 1e-6) * 0.8
+                                result_face[:, :, c] = np.clip(result_face[:, :, c] * scale, 0, 255).astype(np.uint8)
+                        logger.debug(f"🎨 색상 매칭 적용: orig_mean vs result_mean 보정")
 
                     # 🔑 크기 검증 및 강제 맞춤 (찌그러짐 방지)
                     expected_w, expected_h = x2 - x1, y2 - y1
