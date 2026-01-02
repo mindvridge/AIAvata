@@ -723,8 +723,8 @@ class MuseTalkModel:
 
                 # 🔑 차이가 작으면 입 영역만 부드럽게 증폭
                 if avg_diff_mouth < 25.0:
-                    # 증폭 계수 감소 (1.5~2.0배) - 아티팩트 방지
-                    amplify_factor = max(1.5, min(2.0, 35.0 / max(avg_diff_mouth, 1.0)))
+                    # 증폭 계수 증가 (2.5~4.0배) - 입 모양 크게
+                    amplify_factor = max(2.5, min(4.0, 50.0 / max(avg_diff_mouth, 1.0)))
 
                     # 입 영역만 선택적 증폭 (마스크 생성)
                     mouth_mask = np.zeros((256, 256), dtype=np.float32)
@@ -817,11 +817,11 @@ class MuseTalkModel:
                                     (0, top_boundary)
                                 )
 
-                                # 🔑 블러 강도 증가 (경계선 더 부드럽게, 0.06 → 0.08)
-                                # 입술 경계 아티팩트 방지를 위해 블러 증가
-                                blur_kernel_size = int(0.08 * ori_shape[0] // 2 * 2) + 1
-                                if blur_kernel_size < 7:
-                                    blur_kernel_size = 7
+                                # 🔑 블러 강도 대폭 증가 (경계선 부드럽게, 0.08 → 0.15)
+                                # 흰색 라인 아티팩트 방지를 위해 블러 대폭 증가
+                                blur_kernel_size = int(0.15 * ori_shape[0] // 2 * 2) + 1
+                                if blur_kernel_size < 15:
+                                    blur_kernel_size = 15
                                 mask_array = cv2.GaussianBlur(
                                     np.array(modified_mask),
                                     (blur_kernel_size, blur_kernel_size), 0
@@ -917,10 +917,10 @@ class MuseTalkModel:
                                     intensity = int(200 * (1.0 - dist * 0.5))  # 최대 200
                                     mask_array[y, x] = max(mask_array[y, x], intensity)
                         
-                        # 🔑 블러 강도 증가 (경계선 더 부드럽게, 0.06 → 0.08)
-                        blur_kernel_size = int(0.08 * ori_shape[0] // 2 * 2) + 1
-                        if blur_kernel_size < 7:
-                            blur_kernel_size = 7
+                        # 🔑 블러 강도 대폭 증가 (경계선 부드럽게, 0.08 → 0.15)
+                        blur_kernel_size = int(0.15 * ori_shape[0] // 2 * 2) + 1
+                        if blur_kernel_size < 15:
+                            blur_kernel_size = 15
                         mask_array = cv2.GaussianBlur(mask_array, (blur_kernel_size, blur_kernel_size), 0)
 
                         # 🔑 마스크 최대값 255 (완전 불투명)
