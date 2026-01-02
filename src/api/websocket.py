@@ -1148,6 +1148,16 @@ class AvatarWebSocketHandler:
                 state_machine.transition_to(ConnectionState.CONNECTED)
                 await self._send_state_status(websocket, state_machine.state)
 
+                # 🔑 립싱크 완료 후 아이들 프레임 전송 (입 열린 상태 방지)
+                try:
+                    idle_frame = self.pipeline.avatar_renderer.get_idle_frame()
+                    if idle_frame is not None:
+                        _, jpeg_data = cv2.imencode(".jpg", idle_frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
+                        await websocket.send_bytes(jpeg_data.tobytes())
+                        logger.debug("립싱크 완료 후 아이들 프레임 전송")
+                except Exception as e:
+                    logger.warning(f"아이들 프레임 전송 실패: {e}")
+
                 # 서버 사이드 idle 스트림이 활성화된 경우에만 재시작
                 disable_idle_stream = getattr(self.pipeline.settings, 'disable_server_idle_stream', True)
                 if not disable_idle_stream:
