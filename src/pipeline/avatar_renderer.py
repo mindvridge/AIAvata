@@ -688,10 +688,10 @@ class AvatarRenderer:
             )
             
             if frame_idx_in_loop == 0:
-                logger.info(f"📐 get_idle_frame: idle_loop 프레임 리사이즈 완료 ({w}x{h} → {self.output_width}x{self.output_height}) - 루프 시작")
+                logger.debug(f"📐 get_idle_frame: idle_loop 프레임 리사이즈 완료 ({w}x{h} → {self.output_width}x{self.output_height}) - 루프 시작")
         elif frame_idx_in_loop == 0:
             # 첫 프레임이고 크기가 올바르면 로깅만
-            logger.info(f"📐 get_idle_frame: idle_loop 프레임 ({w}x{h}) - 루프 시작")
+            logger.debug(f"📐 get_idle_frame: idle_loop 프레임 ({w}x{h}) - 루프 시작")
 
         # 루프 끝에 도달했고, 대기 중이면 이벤트 발생
         if self._waiting_for_loop_end and self._loop_end_event:
@@ -817,10 +817,10 @@ class AvatarRenderer:
                     frame = cv2.resize(frame, (target_w, target_h), interpolation=cv2.INTER_CUBIC)
                     final_w = target_w
                     final_h = target_h
-                    logger.info(f"✅ [File Stream Frame {frame_index}] 크기 보정 완료: {final_w}x{final_h}")
+                    logger.debug(f"✅ [File Stream Frame {frame_index}] 크기 보정 완료: {final_w}x{final_h}")
                 
                 if frame_index == 0 or frame_index % 30 == 0:
-                    logger.info(f"📐 [File Stream Frame {frame_index}] JPEG 인코딩 전: {final_w}x{final_h}, target: {target_w}x{target_h}")
+                    logger.debug(f"📐 [File Stream Frame {frame_index}] JPEG 인코딩 전: {final_w}x{final_h}, target: {target_w}x{target_h}")
                     print(f"[FRAME {frame_index}] JPEG 인코딩 전: {final_w}x{final_h}", flush=True)
                 
                 # JPEG 인코딩
@@ -835,7 +835,7 @@ class AvatarRenderer:
                     logger.error(f"❌ [File Stream Frame {frame_index}] 인코딩 직전 크기 불일치! {final_w_check}x{final_h_check} (예상: {target_w}x{target_h})")
                 
                 if frame_index == 0 or frame_index % 30 == 0:
-                    logger.info(f"📐 [File Stream Frame {frame_index}] JPEG 인코딩 완료: {len(encoded)} bytes, 전송 크기: {final_w}x{final_h}")
+                    logger.debug(f"📐 [File Stream Frame {frame_index}] JPEG 인코딩 완료: {len(encoded)} bytes, 전송 크기: {final_w}x{final_h}")
 
                 yield VideoFrame(
                     data=encoded.tobytes(),
@@ -907,10 +907,10 @@ class AvatarRenderer:
                 frame = cv2.resize(frame, (target_w, target_h), interpolation=cv2.INTER_CUBIC)
                 final_w = target_w
                 final_h = target_h
-                logger.info(f"✅ [Memory Stream Frame {frame_index}] 크기 보정 완료: {final_w}x{final_h}")
+                logger.debug(f"✅ [Memory Stream Frame {frame_index}] 크기 보정 완료: {final_w}x{final_h}")
             
             if frame_index == 0 or frame_index % 30 == 0:
-                logger.info(f"📐 [Memory Stream Frame {frame_index}] JPEG 인코딩 전: {final_w}x{final_h}, target: {target_w}x{target_h}")
+                logger.debug(f"📐 [Memory Stream Frame {frame_index}] JPEG 인코딩 전: {final_w}x{final_h}, target: {target_w}x{target_h}")
                 print(f"[FRAME {frame_index}] JPEG 인코딩 전: {final_w}x{final_h}", flush=True)
             
             # JPEG 인코딩
@@ -925,7 +925,7 @@ class AvatarRenderer:
                 logger.error(f"❌ [Memory Stream Frame {frame_index}] 인코딩 직전 크기 불일치! {final_w_check}x{final_h_check} (예상: {target_w}x{target_h})")
             
             if frame_index == 0 or frame_index % 30 == 0:
-                logger.info(f"📐 [Memory Stream Frame {frame_index}] JPEG 인코딩 완료: {len(encoded)} bytes, 전송 크기: {final_w}x{final_h}")
+                logger.debug(f"📐 [Memory Stream Frame {frame_index}] JPEG 인코딩 완료: {len(encoded)} bytes, 전송 크기: {final_w}x{final_h}")
 
             yield VideoFrame(
                 data=encoded.tobytes(),
@@ -1011,7 +1011,7 @@ class AvatarRenderer:
                 # 🔑 프레임 크기 로깅 (모든 프레임)
                 if frame_index == 0:
                     print(f"[FRAME 0] base_frame={base_frame.shape[1]}x{base_frame.shape[0]}, target={target_w}x{target_h}", flush=True)
-                    logger.info(f"📐 [Frame {frame_index}] base_frame={target_w}x{target_h} (확정), output_size={self.output_width}x{self.output_height}")
+                    logger.debug(f"📐 [Frame {frame_index}] base_frame={target_w}x{target_h} (확정), output_size={self.output_width}x{self.output_height}")
 
                 # 립싱크 적용
                 lipsync_frame = await self._apply_lipsync(
@@ -1024,7 +1024,7 @@ class AvatarRenderer:
                     print(f"[FRAME 0] lipsync 결과={lw}x{lh}, target={target_w}x{target_h}", flush=True)
                     if lw == 512 and lh == 512:
                         print(f"[ERROR] MuseTalk이 512x512 반환! 리사이즈 필요!", flush=True)
-                    logger.info(f"📐 [Frame {frame_index}] lipsync 결과={lw}x{lh}, target={target_w}x{target_h}")
+                    logger.debug(f"📐 [Frame {frame_index}] lipsync 결과={lw}x{lh}, target={target_w}x{target_h}")
 
                 # 🔑 프레임 크기가 base_frame 크기와 다르면 리사이즈 (Settings 무시, 원본 비디오 크기 사용)
                 if lipsync_frame.shape[1] != target_w or lipsync_frame.shape[0] != target_h:
@@ -1046,10 +1046,10 @@ class AvatarRenderer:
                     )
                     final_w = target_w
                     final_h = target_h
-                    logger.info(f"✅ [Frame {frame_index}] 최종 크기 보정 완료: {final_w}x{final_h}")
+                    logger.debug(f"✅ [Frame {frame_index}] 최종 크기 보정 완료: {final_w}x{final_h}")
                 
                 if frame_index == 0 or frame_index % 30 == 0:
-                    logger.info(f"📐 [Frame {frame_index}] JPEG 인코딩 전: {final_w}x{final_h}, JPEG bytes: 예정")
+                    logger.debug(f"📐 [Frame {frame_index}] JPEG 인코딩 전: {final_w}x{final_h}, JPEG bytes: 예정")
 
                 # JPEG 인코딩
                 _, encoded = cv2.imencode(
@@ -1069,7 +1069,7 @@ class AvatarRenderer:
                         print(f"[WARNING] JPEG 검증 디코딩 실패", flush=True)
 
                 if frame_index == 0 or frame_index % 30 == 0:
-                    logger.info(f"📐 [Frame {frame_index}] JPEG 인코딩 완료: {len(encoded)} bytes, 전송 크기={final_w}x{final_h}")
+                    logger.debug(f"📐 [Frame {frame_index}] JPEG 인코딩 완료: {len(encoded)} bytes, 전송 크기={final_w}x{final_h}")
 
                 yield VideoFrame(
                     data=encoded.tobytes(),
@@ -1082,7 +1082,7 @@ class AvatarRenderer:
 
                 frame_index += 1
                 if frame_index % 10 == 0:
-                    logger.info(f"🎬 Generated {frame_index} lip sync frames")
+                    logger.debug(f"🎬 Generated lip sync frames")
 
                 # 프레임 레이트 조절
                 elapsed = time.time() - frame_start

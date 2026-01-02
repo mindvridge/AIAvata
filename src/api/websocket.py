@@ -274,7 +274,7 @@ class AvatarWebSocketHandler:
                 self._active_connections[connection_id]["idle_task"] = None
 
             # 메시지 수신 루프
-            logger.info("🔄 메시지 수신 루프 시작")
+            logger.debug("🔄 메시지 수신 루프 시작")
             print("[TEST] 메시지 수신 루프 시작", flush=True)  # 🔑 테스트 출력
             while True:
                 message = await websocket.receive()
@@ -294,12 +294,12 @@ class AvatarWebSocketHandler:
                             logger.warning(f"Audio chunk too large: {len(audio_data)} bytes")
                             await self._send_error(websocket, "Audio chunk too large")
                             continue
-                        logger.info(f"📥 오디오 데이터 수신: {len(audio_data)} bytes")
+                        logger.debug(f"📥 오디오 데이터 수신: {len(audio_data)} bytes")
                         print(f"[TEST] 오디오 데이터 수신: {len(audio_data)} bytes", flush=True)  # 🔑 테스트 출력
                         await self._handle_audio(websocket, audio_data, uuid_session)
                     elif "text" in message:
                         text_data = message["text"]
-                        logger.info(f"📥 텍스트 메시지 수신: {text_data}")
+                        logger.debug(f"📥 텍스트 메시지 수신: {text_data}")
                         print(f"[TEST] 텍스트 메시지 수신: {text_data}", flush=True)  # 🔑 테스트 출력
                         # 메시지 크기 검증
                         if len(text_data) > self.pipeline.settings.max_message_size_bytes:
@@ -465,7 +465,7 @@ class AvatarWebSocketHandler:
             ):
                 # 🔑 첫 프레임 크기 로깅 (512x512 문제 디버그)
                 if frame_count == 0:
-                    logger.info(f"📐 [WebSocket Buffered Audio] 첫 번째 프레임: {frame.width}x{frame.height}, JPEG bytes: {len(frame.data)}")
+                    logger.debug(f"📐 [WebSocket Buffered Audio] 첫 번째 프레임: {frame.width}x{frame.height}, JPEG bytes: {len(frame.data)}")
                 frame_count += 1
                 await websocket.send_bytes(frame.data)
         except Exception as e:
@@ -601,7 +601,7 @@ class AvatarWebSocketHandler:
                 # 🔑 첫 프레임 크기 로깅 및 파일 저장 (512x512 문제 디버그)
                 if frame_count == 0:
                     print(f"[FIRST FRAME] Width={frame.width}, Height={frame.height}, Bytes={len(frame.data)}", flush=True)
-                    logger.info(f"📐 [WebSocket Idle] 첫 번째 프레임: {frame.width}x{frame.height}, JPEG bytes: {len(frame.data)}")
+                    logger.debug(f"📐 [WebSocket Idle] 첫 번째 프레임: {frame.width}x{frame.height}, JPEG bytes: {len(frame.data)}")
                     # 🔑 512x512 프레임 감지 시 즉시 경고
                     if frame.width == 512 and frame.height == 512:
                         print(f"[ERROR] 첫 프레임이 512x512입니다! 백엔드 프레임 생성 문제!", flush=True)
@@ -672,9 +672,9 @@ class AvatarWebSocketHandler:
                             print(f"[WARNING] Frame #{frame_count}: JPEG decode failed, sending original", flush=True)
 
                     if frame_count <= 3:
-                        logger.info(f"🎬 Idle frame #{frame_count}: sending {len(frame_data)} bytes")
+                        logger.debug(f"🎬 Idle frame #{frame_count}: sending {len(frame_data)} bytes")
                     elif frame_count % 30 == 0:
-                        logger.info(f"🎬 Sent {frame_count} idle frames to connection {connection_id}")
+                        logger.debug(f"🎬 Sent idle frames to connection {connection_id}")
 
                     await websocket.send_bytes(frame_data)
                 except Exception as e:

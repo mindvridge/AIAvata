@@ -416,9 +416,9 @@ class MuseTalkModel:
         if not self._initialized:
             await self.initialize()
 
-        # 🔑 입력 프레임 크기 로깅
+        # 🔑 입력 프레임 크기 로깅 (첫 프레임만)
         h, w = source_frame.shape[:2]
-        logger.info(f"📐 MuseTalk process_frame 입력: {w}x{h}")
+        logger.debug(f"📐 MuseTalk process_frame 입력: {w}x{h}")
 
         # 모델이 로드되지 않았으면 에러 표시
         if self._unet is None:
@@ -505,7 +505,7 @@ class MuseTalkModel:
                 # 패딩 정보 저장
                 pad_info = (pad_x, pad_y, new_w, new_h, face_h, face_w)
                 
-                logger.info(f"📐 얼굴 크롭 비율 유지: 원본={face_w}x{face_h} (비율={face_aspect:.4f}), 리사이즈={new_w}x{new_h}, 패딩=({pad_x},{pad_y})")
+                logger.debug(f"📐 얼굴 크롭 비율 유지: 원본={face_w}x{face_h} (비율={face_aspect:.4f}), 리사이즈={new_w}x{new_h}, 패딩=({pad_x},{pad_y})")
                 logger.debug(f"Face detected: bbox=({x1}, {y1}, {x2}, {y2}), aspect={face_aspect:.2f}, padded to 256x256 (pad={pad_x},{pad_y})")
             else:
                 # 얼굴 감지 실패 시 전체 프레임 사용 (비율 유지)
@@ -529,7 +529,7 @@ class MuseTalkModel:
                 # 패딩 정보 저장 (전체 프레임용)
                 pad_info = (pad_x, pad_y, new_w, new_h, h, w)
                 face_bbox = None
-                logger.info(f"📐 전체 프레임 비율 유지: 원본={w}x{h} (비율={aspect:.4f}), 리사이즈={new_w}x{new_h}, 패딩=({pad_x},{pad_y})")
+                logger.debug(f"📐 전체 프레임 비율 유지: 원본={w}x{h} (비율={aspect:.4f}), 리사이즈={new_w}x{new_h}, 패딩=({pad_x},{pad_y})")
                 logger.debug(f"Face not detected, using full frame (aspect={aspect:.2f}, padded to 256x256, pad={pad_x},{pad_y})")
             
             # VAE로 얼굴 이미지를 latent로 인코딩
@@ -577,7 +577,7 @@ class MuseTalkModel:
                 try:
                     # UNet 추론 (MuseTalk realtime_inference.py 방식)
                     # TensorRT가 있으면 사용, 없으면 PyTorch 모델 사용
-                    logger.info(f"🔄 UNet inference starting - latent: {latent_input.shape}, audio: {audio_features.shape}")
+                    logger.debug(f"🔄 UNet inference starting - latent: {latent_input.shape}, audio: {audio_features.shape}")
                     
                     if self._unet_trt is not None:
                         # TensorRT 추론
@@ -604,7 +604,7 @@ class MuseTalkModel:
                         # .sample 속성 접근 (UNet2DConditionModel의 반환값)
                         pred_latents = unet_output.sample
 
-                    logger.info(f"✅ UNet output: {pred_latents.shape}")
+                    logger.debug(f"✅ UNet output: {pred_latents.shape}")
                 except Exception as e:
                     logger.error(f"❌ UNet 추론 실패: {e}")
                     logger.error(f"   latent_input shape: {latent_input.shape}, dtype: {latent_input.dtype}")
@@ -618,10 +618,10 @@ class MuseTalkModel:
                 # VAE 디코딩
                 vae_device = next(self._vae.vae.parameters()).device
                 vae_dtype = next(self._vae.vae.parameters()).dtype
-                logger.info(f"🔄 VAE decoding starting... (VAE device={vae_device}, dtype={vae_dtype})")
+                logger.debug(f"🔄 VAE decoding starting... (VAE device={vae_device}, dtype={vae_dtype})")
                 pred_latents = pred_latents.to(dtype=self._vae.vae.dtype)
                 recon = self._vae.decode_latents(pred_latents)
-                logger.info(f"✅ VAE decoded: type={type(recon)}, shape={recon.shape if hasattr(recon, 'shape') else 'N/A'}")
+                logger.debug(f"✅ VAE decoded: type={type(recon)}, shape={recon.shape if hasattr(recon, 'shape') else 'N/A'}")
                 
                 # 첫 번째 프레임만 사용 (배치 크기 1)
                 if isinstance(recon, (list, tuple)):
@@ -705,7 +705,7 @@ class MuseTalkModel:
                 # 패딩 정보 로깅
                 if pad_info is not None:
                     pad_x, pad_y, resized_w, resized_h, orig_h, orig_w = pad_info
-                    logger.info(f"📐 패딩 정보: pad=({pad_x},{pad_y}), resized=({resized_w}x{resized_h}), orig=({orig_w}x{orig_h})")
+                    logger.debug(f"📐 패딩 정보: pad=({pad_x},{pad_y}), resized=({resized_w}x{resized_h}), orig=({orig_w}x{orig_h})")
                 else:
                     logger.warning("⚠️ pad_info가 None입니다 - 비율 왜곡 가능성")
 
@@ -745,9 +745,9 @@ class MuseTalkModel:
                         diff_selective[:, :, c] = diff[:, :, c] * (1.0 + (amplify_factor - 1.0) * mouth_mask)
                     
                     result_256 = np.clip(source_256.astype(np.float32) + diff_selective, 0, 255).astype(np.uint8)
-                    logger.info(f"🔊 입 영역 차이 증폭: {avg_diff_mouth:.1f} → x{amplify_factor:.2f} (선택적)")
+                    logger.debug(f"🔊 입 영역 차이 증폭: {avg_diff_mouth:.1f} → x{amplify_factor:.2f} (선택적)")
                 else:
-                    logger.info(f"✅ VAE 출력 차이: 입 영역={avg_diff_mouth:.1f}, max={max_diff_mouth:.1f}")
+                    logger.debug(f"✅ VAE 출력 차이: 입 영역={avg_diff_mouth:.1f}, max={max_diff_mouth:.1f}")
 
                 # =====================================================
                 # MuseTalk 원래 블렌딩 방식 사용
@@ -761,7 +761,7 @@ class MuseTalkModel:
                 
                 if face_bbox is not None:
                     x1, y1, x2, y2 = face_bbox
-                    logger.info(f"🔍 Face bbox: ({x1}, {y1}, {x2}, {y2})")
+                    logger.debug(f"🔍 Face bbox: ({x1}, {y1}, {x2}, {y2})")
                     
                     # MuseTalk 방식: Face Parser로 마스크 생성 (mode="jaw")
                     mask_array = None
@@ -770,7 +770,7 @@ class MuseTalkModel:
                     face_parser_error_reason = None
                     
                     if self._face_parser is not None:
-                        logger.info("🔍 Face Parser 시작...")
+                        logger.debug("🔍 Face Parser 시작...")
                         try:
                             # 확장된 얼굴 영역 crop (expand=1.2)
                             expand = 1.2
@@ -795,7 +795,7 @@ class MuseTalkModel:
                             seg_image = self._face_parser(face_large, mode="jaw")
                             
                             if seg_image is not None:
-                                logger.info(f"🔍 Face Parser 출력: type={type(seg_image).__name__}, size={seg_image.size if hasattr(seg_image, 'size') else 'N/A'}")
+                                logger.debug(f"🔍 Face Parser 출력: type={type(seg_image).__name__}, size={seg_image.size if hasattr(seg_image, 'size') else 'N/A'}")
                                 seg_image = seg_image.resize(ori_shape)
                                 
                                 # face_box 영역만 추출
@@ -837,7 +837,7 @@ class MuseTalkModel:
                                     face_parser_error_reason = f"마스크 픽셀 부족 ({valid_pixels}개)"
                                     mask_array = None
                                 else:
-                                    logger.info(f"✅ Face Parser 성공: blur={blur_kernel_size}, pixels={valid_pixels}, max={np.max(mask_array):.0f}")
+                                    logger.debug(f"✅ Face Parser 성공: blur={blur_kernel_size}, pixels={valid_pixels}, max={np.max(mask_array):.0f}")
                             else:
                                 face_parser_error_reason = "Face Parser가 None 반환"
                                 logger.error("❌ Face Parser가 None 반환!")
@@ -932,7 +932,7 @@ class MuseTalkModel:
                     # 🔑 패딩 제거 후 원본 비율로 리사이즈 (비율 왜곡 방지)
                     if pad_info is not None:
                         pad_x, pad_y, resized_w, resized_h, orig_face_h, orig_face_w = pad_info
-                        logger.info(f"📐 패딩 제거: result_256 shape={result_256.shape}, pad=({pad_x},{pad_y}), extract=({resized_w}x{resized_h})")
+                        logger.debug(f"📐 패딩 제거: result_256 shape={result_256.shape}, pad=({pad_x},{pad_y}), extract=({resized_w}x{resized_h})")
                         
                         # 패딩 제거: 원본 비율로 리사이즈된 영역만 추출
                         result_without_pad = result_256[pad_y:pad_y+resized_h, pad_x:pad_x+resized_w]
@@ -946,7 +946,7 @@ class MuseTalkModel:
                         expected_aspect = orig_face_w / orig_face_h
                         aspect_diff = abs(restored_aspect - expected_aspect)
                         
-                        logger.info(f"📐 복원 결과: {result_face.shape[1]}x{result_face.shape[0]}, 비율={restored_aspect:.4f}, 예상={expected_aspect:.4f}, 차이={aspect_diff:.4f}")
+                        logger.debug(f"📐 복원 결과: {result_face.shape[1]}x{result_face.shape[0]}, 비율={restored_aspect:.4f}, 예상={expected_aspect:.4f}, 차이={aspect_diff:.4f}")
                     else:
                         # 패딩 정보가 없으면 기존 방식 (하지만 일반적으로는 pad_info가 있어야 함)
                         logger.warning(f"⚠️ pad_info 없음 - 강제 리사이즈: {result_256.shape} → ({x2-x1}x{y2-y1})")
@@ -981,7 +981,7 @@ class MuseTalkModel:
                     mask_max = np.max(mask_array)
                     mask_mean = np.mean(mask_array)
                     mask_nonzero = np.count_nonzero(mask_array)
-                    logger.info(f"🎭 블렌딩 마스크: min={mask_min}, max={mask_max}, mean={mask_mean:.1f}, nonzero={mask_nonzero}")
+                    logger.debug(f"🎭 블렌딩 마스크: min={mask_min}, max={mask_max}, mean={mask_mean:.1f}, nonzero={mask_nonzero}")
                     
                     body_pil.paste(face_large, (crop_x1, crop_y1), mask_pil)
                     
@@ -995,7 +995,7 @@ class MuseTalkModel:
                         logger.warning(f"⚠️ MuseTalk 출력 크기 불일치: 결과={result_w}x{result_h}, 원본={source_w}x{source_h}, 리사이즈 적용")
                         result_frame = cv2.resize(result_frame, (source_w, source_h), interpolation=cv2.INTER_CUBIC)
                     
-                    logger.info(f"✅ MuseTalk lip sync SUCCESS: output shape={result_frame.shape}")
+                    logger.debug(f"✅ MuseTalk lip sync SUCCESS: output shape={result_frame.shape}")
                     return result_frame
 
                 # 얼굴 bbox가 없는 경우 (폴백) - 전체 프레임에 VAE 출력 적용
@@ -1013,7 +1013,7 @@ class MuseTalkModel:
                         result_frame = cv2.resize(result_256, (w, h), interpolation=cv2.INTER_CUBIC)
 
                     if result_frame is not None and result_frame.shape[:2] == (h, w):
-                        logger.info(f"✅ MuseTalk lip sync SUCCESS: output shape={result_frame.shape}")
+                        logger.debug(f"✅ MuseTalk lip sync SUCCESS: output shape={result_frame.shape}")
                         return result_frame
                     else:
                         logger.warning(f"Resize result invalid: {result_frame.shape if result_frame is not None else None}, returning source frame")
@@ -1100,7 +1100,7 @@ class MuseTalkModel:
                     first_layer = hidden_states[0]
                     batch_size, seq_len, hidden_dim = first_layer.shape
                     
-                    logger.info(f"🎤 Whisper: {num_layers} layers, seq_len={seq_len}, hidden_dim={hidden_dim}")
+                    logger.debug(f"🎤 Whisper: {num_layers} layers, seq_len={seq_len}, hidden_dim={hidden_dim}")
                     
                     # MuseTalk은 5개 레이어 × 10 time steps = 50 사용
                     # Whisper-tiny는 5개 레이어 (embedding + 4 encoder layers)
@@ -1182,7 +1182,7 @@ class MuseTalkModel:
                     elif audio_feats_final.shape[1] > TARGET_SEQ_LEN:
                         audio_feats_final = audio_feats_final[:, :TARGET_SEQ_LEN, :]
                     
-                    logger.info(f"✅ Audio features: {audio_feats_final.shape}")  # [1, 50, 384]
+                    logger.debug(f"✅ Audio features: {audio_feats_final.shape}")  # [1, 50, 384]
                     return audio_feats_final
             else:
                 logger.error("❌ Whisper encoder가 로드되지 않음!")
